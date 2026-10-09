@@ -8,12 +8,27 @@ import plotly.express as px
 import streamlit as st
 
 from erp import auth, db
-from erp.services import evm, finance, inventory, ocr
+from erp.services import evm, finance, inventory, nf_import, ocr
 from erp.storage import load_media, store_media
 from erp.ui import charts
 from erp.ui.common import blink_alert, can_edit, current_user, header, money, money_short, read_only_notice, username
 
 KINDS = ["Material", "Serviço", "Material + Mão de obra"]
+AUTO = "➕ Cadastrar automaticamente"
+
+
+def _items_frame(res: dict | None, mat_names: list[str], materials: list[dict]) -> pd.DataFrame:
+    """Itens lidos da NF já casados com os materiais existentes (ou marcados para cadastro automático)."""
+    cols = ["Descrição", "Quantidade", "Unidade", "Preço unitário", "Material", "Código fornecedor"]
+    found = (res or {}).get("items") or []
+    if not found:
+        return pd.DataFrame({c: pd.Series([], dtype="float" if c in ("Quantidade", "Preço unitário") else "object")
+                             for c in cols})
+    by_id = {m["id"]: label for m, label in zip(materials, mat_names)}
+    resolved = nf_import.resolve_items(found, st.session_state.get("nf_cnpj"))
+    return pd.DataFrame([{"Descrição": it["description"], "Quantidade": it["quantity"], "Unidade": it["unit"],
+                          "Preço unitário": it["unit_price"], "Material": by_id.get(it["material_id"], AUTO),
+                          "Código fornecedor": it.get("supplier_code", "")} for it in resolved], columns=cols)
 
 
 def render() -> None:
@@ -42,15 +57,27 @@ def _launch() -> None:
         prod_file = st.file_uploader("Foto do Produto/Serviço entregue", type=["jpg", "jpeg", "png", "webp"], key="prod_up")
         if prod_file:
             st.image(prod_file, width=260)
+    xml_file = st.file_uploader("XML da NF-e (opcional — leitura exata de fornecedor, valores e itens)", type=["xml"],
+                                key="nf_xml")
     pasted = st.text_area("Texto da NF (opcional — usado quando não há OCR ou para conferência)", height=90, key="nf_text")
 
     if st.button("🔍 Ler NF e preencher automaticamente", type="primary"):
-        if nf_file is None and not pasted:
-            st.warning("Envie a foto da NF ou cole o texto.")
+        if nf_file is None and not pasted and xml_file is None:
+            st.warning("Envie a foto da NF, o XML ou cole o texto.")
         else:
             with st.spinner("Lendo nota fiscal..."):
-                result = ocr.read_invoice(nf_file.getvalue() if nf_file and not pasted else None, pasted or None)
+                try:
+                    if xml_file is not None:
+                        parsed = nf_import.parse_nfe_xml(xml_file.getvalue())
+                        result = {"text": "", "engine": parsed["engine"], "fields": parsed["fields"],
+                                  "items": [i.as_dict() for i in parsed["items"]], "confidence": 1.0}
+                    else:
+                        result = ocr.read_invoice(nf_file.getvalue() if nf_file and not pasted else None, pasted or None)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
             st.session_state["ocr_result"] = result
+            st.session_state["nf_items_rev"] = st.session_state.get("nf_items_rev", 0) + 1
             f = result["fields"]
             st.session_state["nf_supplier"] = f["fornecedor"] or ""
             st.session_state["nf_cnpj"] = f["cnpj"] or ""
@@ -61,7 +88,8 @@ def _launch() -> None:
             st.session_state["nf_inss"] = float(f["inss"] or 0.0)
     res = st.session_state.get("ocr_result")
     if res:
-        st.info(f"OCR ({res['engine']}): {int(res['confidence'] * 3)}/3 campos-chave (Valor, Fornecedor, Emissão) identificados.")
+        st.info(f"Leitura ({res['engine']}): {int(res['confidence'] * 3)}/3 campos-chave (Valor, Fornecedor, Emissão) "
+                f"identificados · {len(res.get('items', []))} item(ns) de material encontrado(s).")
         with st.expander("Texto reconhecido"):
             st.code(res["text"] or "(vazio)")
 
@@ -82,12 +110,16 @@ def _launch() -> None:
         inss = c2.number_input("Retenção INSS (R$)", 0.0, 1e9, step=10.0, key="nf_inss")
         benefit = c3.text_input("Benefício fiscal", placeholder="Ex.: desoneração CPRB, redução de ISS")
         task = st.selectbox("Tarefa do cronograma (centro de custo)", ["-"] + list(tasks))
-        st.markdown("**Itens de material** (alimentam o estoque quando a NF é aprovada)")
-        items = st.data_editor(pd.DataFrame({"Material": pd.Series([], dtype="object"),
-                                             "Quantidade": pd.Series([], dtype="float"),
-                                             "Preço unitário": pd.Series([], dtype="float")}),
-                               num_rows="dynamic", hide_index=True, key="nf_items", width="stretch",
-                               column_config={"Material": st.column_config.SelectboxColumn(options=mat_names)})
+        st.markdown("**Itens de material** — materiais que ainda não existem são **cadastrados automaticamente** "
+                    "ao registrar a NF; a entrada no estoque acontece na aprovação/conferência.")
+        items = st.data_editor(_items_frame(res, mat_names, materials), num_rows="dynamic", hide_index=True,
+                               key=f"nf_items_{st.session_state.get('nf_items_rev', 0)}", width="stretch",
+                               column_config={
+                                   "Material": st.column_config.SelectboxColumn(options=[AUTO] + mat_names, required=True,
+                                                                                help="Deixe em 'cadastrar' para criar o material"),
+                                   "Quantidade": st.column_config.NumberColumn(min_value=0.0, format="%.3f"),
+                                   "Preço unitário": st.column_config.NumberColumn(min_value=0.0, format="R$ %.4f"),
+                                   "Código fornecedor": None})
         approve_now = st.checkbox("Aprovar imediatamente (Administrador)", disabled=not auth.is_admin(current_user()))
         submit = st.form_submit_button("💾 Registrar NF", type="primary")
     if not submit:
@@ -114,14 +146,26 @@ def _launch() -> None:
         "VALUES (?,?,?,?,?,?,?,?,?,?,'Pendente',?,?,?,?)",
         (number, supplier, cnpj, issue.isoformat(), value, kind, iss, inss, benefit, tasks.get(task), nf_key, prod_key,
          res.get("text", ""), db.now_iso()))
-    for r in items.dropna().itertuples():
-        if r.Material in mat_names and r.Quantidade:
-            m = materials[mat_names.index(r.Material)]
-            db.execute("INSERT INTO invoice_items(invoice_id, material_id, quantity, unit_price) VALUES (?,?,?,?)",
-                       (inv_id, m["id"], float(r.Quantidade), float(r[3] or m["unit_cost"])))
+    rows = []
+    for r in items.to_dict("records"):
+        mat = r.get("Material") or AUTO
+        m = materials[mat_names.index(mat)] if mat in mat_names else None
+        desc = str(r.get("Descrição") or "").strip() or (m["name"] if m else "")
+        if not desc or not r.get("Quantidade"):
+            continue
+        rows.append({"description": desc, "quantity": float(r["Quantidade"]), "unit": r.get("Unidade") or (m["unit"] if m else "un"),
+                     "unit_price": float(r.get("Preço unitário") or (m["unit_cost"] if m else 0) or 0),
+                     "supplier_code": str(r.get("Código fornecedor") or ""), "material_id": m["id"] if m else None})
+    reg = nf_import.register_items(inv_id, rows, cnpj)
     if approve_now:
         inventory.approve_invoice(inv_id, username())
-    st.success(f"NF registrada ({'aprovada' if approve_now else 'pendente de aprovação'}). " + " | ".join(storage_msgs))
+    msg = f"NF registrada ({'aprovada e com entrada no estoque' if approve_now else 'pendente de aprovação'})."
+    if reg["created"]:
+        msg += f" {reg['created']} material(is) novo(s) cadastrado(s) automaticamente."
+    if reg["linked"]:
+        msg += f" {reg['linked']} item(ns) vinculado(s) a materiais existentes."
+    st.success(msg + (" " + " | ".join(storage_msgs) if storage_msgs else ""))
+    st.session_state["nf_items_rev"] = st.session_state.get("nf_items_rev", 0) + 1
     st.session_state.pop("ocr_result", None)
 
 

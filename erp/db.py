@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS user_doc_access (
     PRIMARY KEY (user_id, area)
 );
 
+CREATE TABLE IF NOT EXISTS material_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    supplier_cnpj TEXT NOT NULL DEFAULT '',
+    supplier_code TEXT NOT NULL DEFAULT '',
+    description_norm TEXT NOT NULL,
+    UNIQUE (supplier_cnpj, supplier_code, description_norm)
+);
+
 CREATE TABLE IF NOT EXISTS password_resets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -319,6 +328,8 @@ def transaction(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
 # colunas acrescentadas depois da 1ª versão (bancos antigos/restaurados recebem via ALTER TABLE)
 MIGRATIONS = {
     "users": {"email": "TEXT", "status": "TEXT NOT NULL DEFAULT 'ativo'", "request_note": "TEXT", "last_login": "TEXT"},
+    "materials": {"origin": "TEXT NOT NULL DEFAULT 'manual'", "created_at": "TEXT"},
+    "invoice_items": {"description": "TEXT", "supplier_code": "TEXT"},
 }
 
 

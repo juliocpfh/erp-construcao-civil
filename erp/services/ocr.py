@@ -142,7 +142,10 @@ def read_invoice(image_bytes: bytes | None = None, text: str | None = None) -> d
     engine = "texto informado"
     if text is None and image_bytes is not None:
         text, engine = extract_text(image_bytes)
+    from erp.services.nf_import import parse_items_text
+
     fields = parse_invoice_text(text or "")
     found = sum(1 for k in ("fornecedor", "valor", "emissao") if fields.get(k))
     return {"text": text or "", "engine": engine, "fields": fields, "confidence": found / 3,
+            "items": [i.as_dict() for i in parse_items_text(text or "")],
             "read_at": datetime.now().isoformat(timespec="seconds")}

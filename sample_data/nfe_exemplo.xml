@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <NFe>
+    <infNFe Id="NFe41261012345678000195550010000045211000045210" versao="4.00">
+      <ide><cUF>41</cUF><natOp>VENDA DE MERCADORIA</natOp><mod>55</mod><serie>1</serie><nNF>4521</nNF>
+        <dhEmi>2026-09-28T10:15:00-03:00</dhEmi></ide>
+      <emit><CNPJ>12345678000195</CNPJ><xNome>Deposito Curitibano de Materiais Ltda</xNome>
+        <enderEmit><xMun>Curitiba</xMun><UF>PR</UF></enderEmit></emit>
+      <dest><CNPJ>98765432000110</CNPJ><xNome>Construtora Exemplo Ltda</xNome></dest>
+      <det nItem="1"><prod><cProd>CIM50</cProd><xProd>CIMENTO CP-II 50 KG</xProd><NCM>25232910</NCM><CFOP>5102</CFOP>
+        <uCom>SC</uCom><qCom>120.0000</qCom><vUnCom>38.5000000000</vUnCom><vProd>4620.00</vProd></prod></det>
+      <det nItem="2"><prod><cProd>ARG-AC3</cProd><xProd>ARGAMASSA COLANTE AC-III 20KG</xProd><NCM>32141010</NCM><CFOP>5102</CFOP>
+        <uCom>SC</uCom><qCom>80.0000</qCom><vUnCom>34.9000000000</vUnCom><vProd>2792.00</vProd></prod></det>
+      <det nItem="3"><prod><cProd>REJ-CZ</cProd><xProd>REJUNTE FLEXIVEL CINZA 1KG</xProd><NCM>32149000</NCM><CFOP>5102</CFOP>
+        <uCom>UN</uCom><qCom>60.0000</qCom><vUnCom>12.4000000000</vUnCom><vProd>744.00</vProd></prod></det>
+      <total><ICMSTot><vProd>8156.00</vProd><vNF>8156.00</vNF></ICMSTot></total>
+    </infNFe>
+  </NFe>
+</nfeProc>
