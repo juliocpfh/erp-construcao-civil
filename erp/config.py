@@ -69,3 +69,8 @@ WBS_STATUS = ["A Fazer", "Em Andamento", "Concluído"]
 INVOICE_STATUS = ["Pendente", "Aprovada", "Rejeitada"]
 GED_FOLDERS = ["Projetos", "Listas de Materiais", "Laudos/Licenças"]
 LEGAL_CATEGORIES = ["Copel", "Sanepar", "Bombeiros", "Calçadas", "ABNT"]
+# áreas de documentos que podem ser liberadas por usuário (GED e repositório legal)
+DOC_AREAS: dict[str, str] = {
+    **{f"ged:{f}": f"GED · {f}" for f in GED_FOLDERS},
+    **{f"legal:{c}": f"Leis · {c}" for c in LEGAL_CATEGORIES},
+}

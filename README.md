@@ -49,15 +49,24 @@ O SQLite trabalha no disco do servidor do app e é copiado para `<pasta base>/ba
   (a tela gera o bloco pronto). Se o IP do FTP muda com frequência, use um DNS dinâmico
   (No-IP/DuckDNS) como endereço.
 
-## Rodando no seu computador (Windows)
+## Instalador para Windows (.exe)
 
-1. Instale o Python 3.12 (python.org), marcando **Add Python to PATH**.
-2. Baixe o repositório (**Code → Download ZIP**) e descompacte, por exemplo em `C:\ERP`.
-3. Dê dois cliques em **`iniciar.bat`**: na primeira vez ele instala as dependências; depois abre o
-   sistema e mostra o endereço para usar no celular (mesma rede Wi-Fi).
+Baixe **`ERP-Obras-Setup.exe`** na release **"ERP Obras para Windows"** do GitHub
+(`Releases → instalador-windows`), gerada automaticamente a cada atualização do `main` pelo workflow
+`.github/workflows/windows-installer.yml`. O instalador não pede administrador e já inclui:
+Python, todas as bibliotecas, **Tesseract com português (OCR de notas fiscais)** e ffmpeg.
 
-O banco fica em `data\erp_obra.db`. Linux/macOS: `./iniciar.sh`. OCR opcional no Windows: instale o
-Tesseract (UB-Mannheim) com o idioma português.
+- Atalho **ERP Obras** na área de trabalho: abre o sistema no navegador (feche a janela preta para encerrar).
+- Dados em `%LOCALAPPDATA%\ERP Obras\data` (preservados ao atualizar/reinstalar).
+- No primeiro login do administrador aparece a **escolha do banco de dados**:
+  - **Neste computador (disco):** acessível só neste computador; não pelo celular nem remotamente.
+  - **No seu FTP:** quem tem o link do sistema publicado acessa de qualquer lugar conforme o nível de
+    acesso; no PC, o celular no mesmo Wi-Fi também acessa. PC e site sincronizam pelo FTP e o sistema
+    avisa se houver lançamentos simultâneos nos dois.
+- Acesso a documentos por usuário: **Gestão de Usuários → Acesso a documentos** (pastas do GED e
+  categorias de leis).
+
+Alternativa sem instalador: `iniciar.bat` (requer Python 3.12 instalado) ou `./iniciar.sh` no Linux/macOS.
 
 ## Módulos
 
@@ -150,3 +159,5 @@ Observações:
 | `ERP_MASTER_KEY` | chave Fernet para criptografar o `.env` |
 | `ERP_ADMIN_PASSWORD` | senha inicial do `admin` num banco novo (evita a senha padrão) |
 | `ERP_DEMO` | `1` = carrega a simulação na primeira execução |
+| `ERP_STORAGE_MODE` | `ftp` ou `local` (onde fica o banco; sem isso o admin escolhe no 1º login) |
+| `ERP_TESSERACT_CMD` | caminho do `tesseract.exe` (o instalador define sozinho) |

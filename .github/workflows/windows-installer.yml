@@ -1,0 +1,100 @@
+name: Instalador Windows
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", ".devcontainer/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-installer
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ERP_VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Montar a pasta do programa (Python + dependências + Tesseract + ffmpeg)
+        shell: pwsh
+        run: ./installer/build_windows.ps1
+
+      - name: Testes no Windows com o Python embutido
+        shell: pwsh
+        run: |
+          $py = "build\ERP-Obras\python\python.exe"
+          & $py -m venv --system-site-packages "$env:RUNNER_TEMP\testenv"
+          $tp = "$env:RUNNER_TEMP\testenv\Scripts\python.exe"
+          & $tp -m pip install --quiet pytest pyftpdlib
+          $env:ERP_TESSERACT_CMD = (Resolve-Path "build\ERP-Obras\tesseract\tesseract.exe").Path
+          $env:TESSDATA_PREFIX = (Resolve-Path "build\ERP-Obras\tesseract\tessdata").Path
+          & $tp -m pytest -q -p no:cacheprovider tests
+          if ($LASTEXITCODE -ne 0) { throw "testes falharam" }
+
+      - name: Conferir OCR de nota fiscal e abertura do sistema com o pacote final
+        shell: pwsh
+        run: |
+          $app = Resolve-Path "build\ERP-Obras"
+          $py = "$app\python\python.exe"
+          $env:ERP_TESSERACT_CMD = "$app\tesseract\tesseract.exe"
+          $env:TESSDATA_PREFIX = "$app\tesseract\tessdata"
+          $env:ERP_DATA_DIR = "$env:RUNNER_TEMP\erp_smoke"
+          Push-Location $app
+          & $py -c "from erp.services import ocr; r = ocr.read_invoice(open('sample_data/nf_exemplo.png','rb').read(), None); print(r['engine'], r['fields']); assert r['fields']['valor'] == 18792.0 and 'por' in r['engine']"
+          if ($LASTEXITCODE -ne 0) { throw "OCR falhou" }
+          $p = Start-Process $py -ArgumentList "-m","streamlit","run","app.py","--server.headless","true","--server.port","8599" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 2
+            try { if ((Invoke-WebRequest "http://127.0.0.1:8599/_stcore/health" -UseBasicParsing).StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          Stop-Process $p.Id -Force
+          Pop-Location
+          if (-not $ok) { throw "o sistema não abriu" }
+
+      - name: Gerar instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress | Out-Null }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+          & $iscc installer\erp_obras.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falhou" }
+          Get-Item dist\ERP-Obras-Setup.exe | Format-List Name, Length
+
+      - name: Testar instalação silenciosa
+        shell: pwsh
+        run: |
+          Start-Process dist\ERP-Obras-Setup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          $inst = "$env:LOCALAPPDATA\Programs\ERP Obras"
+          foreach ($f in "python\python.exe", "tesseract\tesseract.exe", "tesseract\tessdata\por.traineddata", "ffmpeg\ffmpeg.exe", "erp_launcher.py", "app.py") {
+            if (-not (Test-Path "$inst\$f")) { throw "faltando após instalar: $f" }
+          }
+          & "$inst\python\python.exe" -c "import streamlit, cv2, pytesseract, reportlab, plotly, boto3; print('ok')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ERP-Obras-Setup
+          path: dist/ERP-Obras-Setup.exe
+
+      - name: Publicar na release "instalador-windows"
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "Instalador do ERP Obras para Windows (versão $env:ERP_VERSION, commit $env:GITHUB_SHA). Baixe ERP-Obras-Setup.exe e execute."
+          gh release view instalador-windows *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create instalador-windows --title "ERP Obras para Windows" --notes $notes --target $env:GITHUB_SHA
+          } else {
+            gh release edit instalador-windows --notes $notes
+          }
+          gh release upload instalador-windows dist\ERP-Obras-Setup.exe --clobber

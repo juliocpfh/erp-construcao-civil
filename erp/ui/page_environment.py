@@ -99,9 +99,13 @@ def render() -> None:
         st.dataframe(df, hide_index=True, width="stretch", height=420)
 
     with tabs[2]:
-        cat = st.segmented_control("Categoria", ["Todas"] + LEGAL_CATEGORIES, default="Todas") or "Todas"
-        docs = db.query("SELECT * FROM legal_docs" + (" WHERE category = ?" if cat != "Todas" else "") +
-                        " ORDER BY category, title", (cat,) if cat != "Todas" else ())
+        allowed = auth.doc_areas(current_user())
+        cats = [c for c in LEGAL_CATEGORIES if f"legal:{c}" in allowed]
+        if len(cats) < len(LEGAL_CATEGORIES):
+            st.caption("🔒 Você vê apenas as categorias liberadas para o seu usuário" + (": " + ", ".join(cats) if cats else "."))
+        cat = (st.segmented_control("Categoria", ["Todas"] + cats, default="Todas") or "Todas") if cats else None
+        docs = [d for d in db.query("SELECT * FROM legal_docs ORDER BY category, title")
+                if d["category"] in cats and cat in ("Todas", d["category"])] if cats else []
         for d in docs:
             with st.container(border=True):
                 c1, c2 = st.columns([4, 1])
@@ -110,11 +114,11 @@ def render() -> None:
                 if data:
                     c2.download_button("PDF", data, file_name=d["filename"] or "documento.pdf", mime="application/pdf",
                                        key=f"leg_{d['id']}")
-        if can_edit():
+        if can_edit() and cats:
             with st.form("legal_up", clear_on_submit=True):
                 st.markdown("##### ➕ Adicionar lei/norma (PDF)")
                 c = st.columns(2)
-                category = c[0].selectbox("Categoria", LEGAL_CATEGORIES)
+                category = c[0].selectbox("Categoria", cats)
                 ref = c[1].text_input("Referência (ex.: NBR 9050:2020)")
                 title = st.text_input("Título")
                 f = st.file_uploader("Arquivo PDF", type=["pdf"])

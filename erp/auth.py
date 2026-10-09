@@ -1,7 +1,7 @@
 """Controle de acesso baseado em papéis (RBAC) com permissões dinâmicas por usuário."""
 from __future__ import annotations
 
-from erp.config import ADMIN_PAGES, DEFAULT_PERMISSIONS, MODULES, ROLE_ADMIN, ROLE_VIEWER, ROLES
+from erp.config import ADMIN_PAGES, DEFAULT_PERMISSIONS, DOC_AREAS, MODULES, ROLE_ADMIN, ROLE_VIEWER, ROLES
 from erp.db import connect, execute, now_iso, query, query_one, transaction
 from erp.security import hash_password, password_policy_errors, verify_password
 
@@ -131,3 +131,32 @@ def update_user(user_id: int, *, role: str | None = None, active: bool | None = 
         conn.commit()
     finally:
         conn.close()
+
+
+RESTRICTED_MARK = "__restrito__"
+
+
+def doc_areas(user: dict | None) -> set[str]:
+    """Pastas de documentos que o usuário pode ver. Sem restrição cadastrada = todas."""
+    if not user:
+        return set()
+    if user.get("role") == ROLE_ADMIN:
+        return set(DOC_AREAS)
+    rows = {r["area"] for r in query("SELECT area FROM user_doc_access WHERE user_id = ?", (user["id"],))}
+    if RESTRICTED_MARK not in rows:
+        return set(DOC_AREAS)
+    return rows & set(DOC_AREAS)
+
+
+def set_doc_areas(user_id: int, areas: list[str] | set[str]) -> None:
+    """Grava as pastas liberadas; liberar todas remove a restrição."""
+    areas = set(areas) & set(DOC_AREAS)
+    with transaction() as conn:
+        conn.execute("DELETE FROM user_doc_access WHERE user_id = ?", (user_id,))
+        if areas != set(DOC_AREAS):
+            conn.executemany("INSERT INTO user_doc_access(user_id, area) VALUES (?, ?)",
+                             [(user_id, a) for a in sorted(areas | {RESTRICTED_MARK})])
+
+
+def can_see_doc(user: dict | None, area: str) -> bool:
+    return area in doc_areas(user)

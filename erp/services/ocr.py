@@ -5,9 +5,11 @@ funcionando: o usuário cola o texto da NF (ou chave/QR) e o mesmo parser preenc
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from datetime import date, datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -15,12 +17,21 @@ import numpy as np
 _MONEY = r"(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})"
 
 
+WINDOWS_DEFAULTS = [r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]
+
+
+def tesseract_cmd() -> str | None:
+    """Tesseract embutido no instalador (ERP_TESSERACT_CMD), no PATH ou na pasta padrão do Windows."""
+    candidates = [os.environ.get("ERP_TESSERACT_CMD"), shutil.which("tesseract"), *WINDOWS_DEFAULTS]
+    return next((c for c in candidates if c and Path(c).exists()), None)
+
+
 def ocr_available() -> bool:
     try:
         import pytesseract  # noqa: F401
     except ImportError:
         return False
-    return shutil.which("tesseract") is not None
+    return tesseract_cmd() is not None
 
 
 def preprocess(image_bytes: bytes) -> np.ndarray:
@@ -43,6 +54,7 @@ def extract_text(image_bytes: bytes) -> tuple[str, str]:
         return "", "indisponível"
     import pytesseract
 
+    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd()
     img = preprocess(image_bytes)
     langs = pytesseract.get_languages(config="") if hasattr(pytesseract, "get_languages") else []
     lang = "por" if "por" in langs else "eng"

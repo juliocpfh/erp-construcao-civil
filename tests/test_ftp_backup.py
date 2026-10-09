@@ -35,7 +35,8 @@ def ftp_server(tmp_path):
 
 @pytest.fixture(autouse=True)
 def reset_backup_state():
-    backup._state.update(last_check=0.0, last_hash=None, last_ok=None, last_error=None, armed=False, startup=None)
+    backup._state.update(last_check=0.0, last_hash=None, last_ok=None, last_error=None, armed=False, startup=None,
+                         problem=None, pulled=None)
 
 
 def test_ftp_access_check(empty_db, ftp_server):
@@ -148,3 +149,57 @@ def test_alert_shown_on_every_page(empty_db):
     at = AppTest.from_string(script.replace("{admin}", "False"), default_timeout=30).run()
     assert any("Avise o administrador" in m.value for m in at.markdown)
     assert not any("Testar acesso" in m.value for m in at.markdown)
+
+
+def _use(root, monkeypatch):
+    """Alterna para a pasta de dados de outra instalação (outro computador ou o site)."""
+    monkeypatch.setenv("ERP_DATA_DIR", str(root))
+    backup._state.update(last_hash=None, armed=False, problem=None)
+
+
+def test_two_installations_share_the_ftp_database(empty_db, ftp_server, tmp_path, monkeypatch):
+    settings, _ = ftp_server
+    storage = DualStorage(settings=settings)
+    pc, site = tmp_path / "pc", tmp_path / "site"
+
+    _use(pc, monkeypatch)
+    project.create_blank_project("Obra compartilhada", admin_password="Senha1234")
+    assert backup.sync(storage) == "pushed"
+
+    _use(site, monkeypatch)  # site abre vazio e baixa do FTP
+    db.init_db()
+    assert backup.restore_latest_remote(storage)
+    db.set_setting("project_location", "lançado no site")
+    assert backup.sync(storage) == "pushed"
+
+    _use(pc, monkeypatch)  # PC sem alterações locais: baixa a versão do site
+    assert backup.sync(storage) == "pulled"
+    assert project.project_info()["location"] == "lançado no site"
+    assert backup.sync(storage) == "unchanged"
+
+    # lançamentos simultâneos nos dois lugares -> conflito, nada é sobrescrito
+    db.set_setting("project_description", "lançado no PC")
+    _use(site, monkeypatch)
+    db.set_setting("project_description", "lançado no site de novo")
+    assert backup.sync(storage) == "pushed"
+    _use(pc, monkeypatch)
+    assert backup.sync(storage) == "conflict"
+    assert backup.connection_problem()["kind"] == "blocked"
+    assert backup.remote_manifest(storage)["project"] == "Obra compartilhada"
+    assert project.project_info()["description"] == "lançado no PC"
+
+
+def test_local_mode_never_touches_ftp(empty_db, ftp_server):
+    from erp import storage_mode
+    from erp.storage import store_media
+
+    settings, root = ftp_server
+    storage_mode.set_mode(storage_mode.LOCAL)
+    project.create_blank_project("Obra local", admin_password="Senha1234")
+    s = DualStorage(settings=settings)
+    assert not s.remote
+    assert backup.sync(s) == "unchanged"
+    assert not backup.push_remote(storage=s)["ok"]
+    r = store_media(b"foto", "f.jpg", "fotos-obra", storage=s)
+    assert r.ftp == "não configurado"
+    assert not any(root.rglob("*.*"))

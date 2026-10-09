@@ -94,7 +94,8 @@ class _MemBackend:
 
 @pytest.fixture(autouse=True)
 def reset_backup_state():
-    backup._state.update(last_check=0.0, last_hash=None, last_ok=None, last_error=None, armed=False, startup=None)
+    backup._state.update(last_check=0.0, last_hash=None, last_ok=None, last_error=None, armed=False, startup=None,
+                         problem=None, pulled=None)
 
 
 @pytest.fixture
@@ -156,4 +157,6 @@ def test_restore_older_version(blank, mem_storage):
     assert len(versions) == 2 and versions[-1] == v1
     backup.restore_from_remote(v1, storage=storage)
     assert project.project_info()["name"] == "v1"
-    assert not backup.status()["armed"]  # versão antiga: não sobrescreve automaticamente
+    # voltar a uma versão antiga a publica como a mais recente (as demais ficam no histórico)
+    assert backup.remote_manifest(storage)["project"] == "v1"
+    assert len(backup.list_versions(storage)) == 3

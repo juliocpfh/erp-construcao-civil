@@ -5,7 +5,7 @@ import streamlit as st
 
 st.set_page_config(page_title="ERP Obras · PMO", page_icon="🏗️", layout="wide", initial_sidebar_state="expanded")
 
-from erp import auth, db  # noqa: E402
+from erp import auth, db, storage_mode  # noqa: E402
 from erp.config import ADMIN_PAGES, MODULES, ROLE_ADMIN  # noqa: E402
 from erp.services import backup  # noqa: E402
 from erp.services.project import project_info  # noqa: E402
@@ -115,6 +115,13 @@ def main() -> None:
 
     if user["must_change_password"]:
         change_password_screen(user)
+        return
+
+    if user["role"] == ROLE_ADMIN and storage_mode.needs_choice():
+        inject_css()
+        st.title("💾 Onde guardar o banco de dados?")
+        st.write("Escolha uma vez; dá para trocar depois em **Administração → Projeto e Backup do Banco**.")
+        page_project.storage_choice(first_time=True)
         return
 
     allowed = auth.allowed_pages(user)

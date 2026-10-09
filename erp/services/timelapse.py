@@ -49,7 +49,12 @@ def _overlay(img: np.ndarray, title: str, frame: Frame, idx: int, total: int) ->
 def _transcode_h264(src: str) -> bytes | None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        return None
+        try:  # instalador Windows: binário do pacote imageio-ffmpeg
+            import imageio_ffmpeg
+
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:  # noqa: BLE001
+            return None
     dst = src.replace(".mp4", "_h264.mp4")
     try:
         subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", src, "-c:v", "libx264", "-preset", "veryfast",

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from erp import db
+from erp import auth, db
 from erp.config import GED_FOLDERS
 from erp.storage import load_media, store_media
-from erp.ui.common import can_edit, header, username
+from erp.ui.common import can_edit, current_user, header, username
 
 ALLOWED = ["pdf", "dwg", "dxf", "ifc", "rvt", "skp", "xlsx", "xls", "csv", "docx", "zip", "jpg", "png"]
 ICONS = {"pdf": "📕", "dwg": "📐", "dxf": "📐", "ifc": "🧊", "rvt": "🧊", "csv": "📊", "xlsx": "📊", "xls": "📊", "zip": "🗜️"}
@@ -23,17 +23,24 @@ def _size(n: int) -> str:
 def render() -> None:
     header("Central de Projetos, Quantitativos e Laudos (GED)",
            "Arquivos pesados (PDF, DWG, IFC...) com armazenamento duplo S3 + FTP e controle de versão.")
+    allowed = auth.doc_areas(current_user())
+    folders = [f for f in GED_FOLDERS if f"ged:{f}" in allowed]
+    if not folders:
+        st.info("Nenhuma pasta de documentos liberada para o seu usuário. Fale com o Administrador.")
+        return
+    if len(folders) < len(GED_FOLDERS):
+        st.caption("🔒 Você vê apenas as pastas liberadas para o seu usuário: " + ", ".join(folders) + ".")
     stats = db.query("SELECT folder, COUNT(*) n, SUM(size_bytes) s FROM ged_files GROUP BY folder")
-    cols = st.columns(len(GED_FOLDERS))
+    cols = st.columns(len(folders))
     by = {r["folder"]: r for r in stats}
-    for c, f in zip(cols, GED_FOLDERS):
+    for c, f in zip(cols, folders):
         c.metric(f"📁 {f}", by.get(f, {}).get("n", 0), _size(by.get(f, {}).get("s", 0) or 0), delta_color="off")
 
     if can_edit():
         with st.expander("⬆️ Enviar arquivos", expanded=False):
             with st.form("ged_up", clear_on_submit=True):
                 c = st.columns(2)
-                folder = c[0].selectbox("Pasta", GED_FOLDERS)
+                folder = c[0].selectbox("Pasta", folders)
                 disc = c[1].text_input("Disciplina", placeholder="Arquitetura, Estrutura, BIM, Ambiental...")
                 files = st.file_uploader("Arquivos", type=ALLOWED, accept_multiple_files=True)
                 notes = st.text_input("Observações / revisão")
@@ -50,9 +57,9 @@ def render() -> None:
                                     len(data), version, r.key, username(), db.now_iso(), notes))
                         st.success(f"{f.name} v{version} — S3: {r.s3} · FTP: {r.ftp} · local: {r.local}")
 
-    tabs = st.tabs([f"📁 {f}" for f in GED_FOLDERS])
+    tabs = st.tabs([f"📁 {f}" for f in folders])
     search = st.text_input("🔎 Buscar arquivo", key="ged_search")
-    for tab, folder in zip(tabs, GED_FOLDERS):
+    for tab, folder in zip(tabs, folders):
         with tab:
             files = db.query("SELECT * FROM ged_files WHERE folder = ? ORDER BY discipline, filename, version DESC", (folder,))
             if search:

@@ -239,8 +239,11 @@ class FTPBackend:
 
 class DualStorage:
     def __init__(self, settings: dict[str, str] | None = None, local_root: Path | None = None,
-                 remote: bool = True):
+                 remote: bool | None = None):
+        from erp.storage_mode import is_local
+
         settings = settings if settings is not None else load_connection_settings()
+        remote = (not is_local()) if remote is None else remote  # modo "disco local": nada vai para S3/FTP
         self.local_root = Path(local_root or media_dir())
         self.s3 = S3Backend(settings)
         self.ftp = FTPBackend(settings)
@@ -281,6 +284,8 @@ class DualStorage:
         path = self.local_path(key)
         if path.exists():
             return path.read_bytes()
+        if not self.remote:
+            return None
         for backend in (self.s3, self.ftp):
             if backend.configured:
                 try:
@@ -293,7 +298,7 @@ class DualStorage:
         return None
 
 
-def store_media(data: bytes, filename: str, category: str, *, remote: bool = True,
+def store_media(data: bytes, filename: str, category: str, *, remote: bool | None = None,
                 when: datetime | None = None, storage: DualStorage | None = None) -> StorageResult:
     """Salva a mídia no armazenamento duplo e registra o resultado na tabela ``media``."""
     from erp.db import execute, now_iso

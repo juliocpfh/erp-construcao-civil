@@ -70,3 +70,20 @@ def test_inactive_user_cannot_login(users):
 def test_duplicate_user(users):
     with pytest.raises(auth.AuthError):
         auth.create_user("admin", "x", "Administrador")
+
+
+def test_document_segmentation(empty_db):
+    from erp.config import DOC_AREAS, ROLE_ADMIN, ROLE_VIEWER
+
+    auth.create_user("chefe", "Senha1234", ROLE_ADMIN)
+    uid = auth.create_user("projetista", "Senha1234", ROLE_VIEWER)
+    user = auth.get_user(uid)
+    assert auth.doc_areas(user) == set(DOC_AREAS)  # sem restrição: tudo
+    auth.set_doc_areas(uid, ["ged:Projetos", "legal:ABNT"])
+    assert auth.doc_areas(user) == {"ged:Projetos", "legal:ABNT"}
+    assert not auth.can_see_doc(user, "ged:Laudos/Licenças")
+    auth.set_doc_areas(uid, [])
+    assert auth.doc_areas(user) == set()
+    auth.set_doc_areas(uid, list(DOC_AREAS))
+    assert auth.doc_areas(user) == set(DOC_AREAS)
+    assert auth.doc_areas(auth.authenticate("chefe", "Senha1234")) == set(DOC_AREAS)

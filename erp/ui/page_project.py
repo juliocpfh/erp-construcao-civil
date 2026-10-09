@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 import streamlit as st
 
-from erp import auth, db
+from erp import auth, db, storage_mode
 from erp.security import password_policy_errors
 from erp.services import backup, project
 from erp.settings_store import load_connection_settings, mask, write_env
@@ -20,13 +20,80 @@ def render() -> None:
         st.error("Acesso restrito ao Administrador.")
         st.stop()
     header("Projeto e Backup do Banco", "Dados da obra, cópia de segurança e início de um projeto novo.")
-    tab_info, tab_backup, tab_new = st.tabs(["🏗️ Dados do projeto", "🗄️ Banco no FTP / Backup", "🆕 Novo projeto"])
+    tab_info, tab_mode, tab_backup, tab_new = st.tabs(
+        ["🏗️ Dados do projeto", "💾 Onde fica o banco", "🗄️ Banco no FTP / Backup", "🆕 Novo projeto"])
     with tab_info:
         _project_form()
+    with tab_mode:
+        storage_choice()
     with tab_backup:
-        _backup()
+        if storage_mode.is_local():
+            st.warning("**Modo disco local:** " + storage_mode.LOCAL_WARNING)
+            st.caption("Para usar o FTP, troque na aba **💾 Onde fica o banco**.")
+            _local_file()
+        else:
+            _backup()
     with tab_new:
         _new_project()
+
+
+def storage_choice(first_time: bool = False) -> None:
+    """Escolha de onde fica o banco: disco deste computador ou FTP (com teste de acesso)."""
+    for kind, msg in st.session_state.pop("mode_flash", []):
+        getattr(st, kind)(msg)
+    current = storage_mode.get_mode()
+    if not first_time:
+        label = storage_mode.MODES.get(current or storage_mode.effective_mode() or "", "ainda não escolhido")
+        st.markdown(f"**Modo atual:** {label}")
+    options = [storage_mode.LOCAL, storage_mode.FTP]
+    default = options.index(current or storage_mode.effective_mode() or storage_mode.LOCAL)
+    choice = st.radio("Onde guardar o banco de dados e os arquivos?", options, index=default,
+                      format_func=lambda m: storage_mode.MODES[m], key="storage_choice")
+    if choice == storage_mode.LOCAL:
+        st.error("⚠️ **Atenção:** " + storage_mode.LOCAL_WARNING)
+        if current == storage_mode.LOCAL:
+            st.success("Este é o modo em uso.")
+        elif st.button("💻 Usar o disco deste computador", type="primary"):
+            storage_mode.set_mode(storage_mode.LOCAL)
+            st.session_state["mode_flash"] = [("success", "Banco de dados guardado neste computador.")]
+            st.rerun()
+        return
+
+    st.info("🌐 " + storage_mode.FTP_INFO)
+    st.caption(storage_mode.FTP_CAVEAT)
+    _ftp_form("ftp_cfg_mode", "mode_flash")
+    if not FTPBackend(load_connection_settings()).configured:
+        st.caption("Preencha e salve o FTP acima para continuar.")
+        return
+    if current == storage_mode.FTP:
+        st.success("Este é o modo em uso. Detalhes e versões na aba **🗄️ Banco no FTP / Backup**.")
+        return
+    remote = backup.remote_manifest()
+    if remote is None:
+        st.write("Ainda não há banco no FTP: o banco deste computador será enviado para lá.")
+        if st.button("🌐 Usar o FTP e enviar o banco", type="primary"):
+            res = backup.push_remote(force=True)
+            if res["ok"]:
+                storage_mode.set_mode(storage_mode.FTP)
+                st.session_state["mode_flash"] = [("success", "Modo FTP ativado. " + res["message"])]
+                st.rerun()
+            st.error(res["message"])
+        return
+    st.warning(f"Já existe um banco neste FTP: versão **{remote['version']}** de {_fmt_dt(remote.get('created_at'))}. "
+               + _fmt_info(remote) + "  \nEscolha qual banco vale:")
+    c1, c2 = st.columns(2)
+    if c1.button("⬇️ Usar o banco que está no FTP", type="primary", width="stretch",
+                 help="Substitui os dados deste computador pelos do FTP."):
+        storage_mode.set_mode(storage_mode.FTP)
+        _do_restore(lambda: backup.restore_from_remote())
+    if c2.button("⬆️ Enviar o banco deste computador", width="stretch",
+                 help="Substitui o banco do FTP; a versão anterior continua no histórico."):
+        res = backup.push_remote(force=True)
+        if res["ok"]:
+            storage_mode.set_mode(storage_mode.FTP)
+            st.session_state["mode_flash"] = [("success", "Modo FTP ativado. " + res["message"])]
+            st.rerun()
+        st.error(res["message"])
 
 
 def _project_form() -> None:
@@ -119,12 +186,12 @@ def _status_panel() -> None:
             f"Inicialização do app ({_fmt_dt(startup['at'])}): {startup['message']}")
 
 
-def _ftp_form() -> None:
+def _ftp_form(key: str = "ftp_cfg", flash_key: str = "ftp_flash") -> None:
     st.markdown("##### ⚙️ Configuração e teste do FTP")
     st.caption("Mudou o endereço do FTP? Informe o novo, clique **Testar acesso** e depois **Salvar**. "
                "Campos de senha/usuário em branco mantêm o valor atual.")
     current = load_connection_settings()
-    with st.form("ftp_cfg"):
+    with st.form(key):
         c1, c2, c3 = st.columns([3, 1, 1])
         host = c1.text_input("Endereço (IP ou domínio)", current.get("FTP_HOST", ""))
         port = c2.text_input("Porta", current.get("FTP_PORT", "21"))
@@ -152,7 +219,7 @@ def _ftp_form() -> None:
             if remote:
                 flash.append(("info", f"Backup encontrado neste FTP: versão **{remote['version']}** de "
                                       f"{_fmt_dt(remote.get('created_at'))}. " + _fmt_info(remote)))
-            st.session_state["ftp_flash"] = flash
+            st.session_state[flash_key] = flash
             st.rerun()
         (st.success if ok else st.error)(msg)
         if save:
@@ -167,6 +234,7 @@ FTP_USER = "{values['FTP_USER']}"
 FTP_PASSWORD = "SUA_SENHA_DO_FTP"
 FTP_BASE_DIR = "{values['FTP_BASE_DIR']}"
 FTP_TLS = "{values['FTP_TLS']}"
+ERP_STORAGE_MODE = "ftp"
 ERP_ADMIN_PASSWORD = "senha-inicial-do-admin"''', language="toml")
 
 

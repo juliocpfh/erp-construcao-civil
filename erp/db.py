@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS user_permissions (
     PRIMARY KEY (user_id, module)
 );
 
+CREATE TABLE IF NOT EXISTS user_doc_access (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    area TEXT NOT NULL,
+    PRIMARY KEY (user_id, area)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT

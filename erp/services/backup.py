@@ -28,12 +28,11 @@ LATEST_KEY = f"{REMOTE_DIR}/erp_obra_latest.db"
 MANIFEST_KEY = f"{REMOTE_DIR}/latest.json"
 SQLITE_HEADER = b"SQLite format 3\x00"
 AUTO_INTERVAL_S = 120
-HEALTH_INTERVAL_S = 600  # sem alterações, confere a conexão com o FTP a cada 10 min
 ERP_TABLES = {"users", "settings", "tasks", "wbs"}
 
 _lock = threading.Lock()
 _state: dict = {"last_check": 0.0, "last_hash": None, "last_ok": None, "last_error": None,
-                "armed": False, "startup": None, "problem": None, "last_health": 0.0}
+                "armed": False, "startup": None, "problem": None, "pulled": None}
 
 
 # --------------------------------------------------------------------------- problemas de conexão
@@ -84,6 +83,34 @@ def health_check(storage: DualStorage | None = None) -> bool:
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _sync_file() -> Path:
+    from erp.config import data_dir
+
+    return data_dir() / "sync_state.json"
+
+
+def _synced_hash() -> str | None:
+    """SHA do banco local logo após o último envio/restauração (persistido entre reinícios)."""
+    if _state["last_hash"] is None:
+        try:
+            _state["last_hash"] = json.loads(_sync_file().read_text(encoding="utf-8")).get("sha")
+        except (OSError, ValueError):
+            pass
+    return _state["last_hash"]
+
+
+def _mark_synced() -> None:
+    _state["last_hash"] = _sha(snapshot())
+    try:
+        _sync_file().write_text(json.dumps({"sha": _state["last_hash"]}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def local_changed() -> bool:
+    return _sha(snapshot()) != _synced_hash()
 
 
 # --------------------------------------------------------------------------- banco local
@@ -166,7 +193,7 @@ def restore(data: bytes, origin: str = "arquivo enviado", version: str | None = 
     info = {**describe(data), "origin": origin, "version": version or "-",
             "restored_at": datetime.now().isoformat(timespec="seconds")}
     db.set_setting("backup_last_restore", json.dumps(info, ensure_ascii=False))
-    _state["last_hash"] = _sha(snapshot())  # o registro acima já mudou o banco; evita reenvio inútil
+    _mark_synced()  # o registro acima já mudou o banco; evita reenvio inútil
     return info
 
 
@@ -188,12 +215,15 @@ def last_restore() -> dict | None:
 
 
 def backup_filename(now: datetime | None = None) -> str:
-    return f"erp_obra_{(now or datetime.now()):%Y%m%d_%H%M%S}.db"
+    now = now or datetime.now()
+    return f"erp_obra_{now:%Y%m%d_%H%M%S}_{now.microsecond // 1000:03d}.db"
 
 
 # --------------------------------------------------------------------------- remoto (FTP/S3)
 def _backends(storage: DualStorage) -> list:
-    """FTP primeiro (fonte principal do banco), depois S3."""
+    """FTP primeiro (fonte principal do banco), depois S3. Nenhum no modo "disco local"."""
+    if not storage.remote:
+        return []
     return [b for b in (storage.ftp, storage.s3) if b.configured]
 
 
@@ -221,9 +251,10 @@ def push_remote(data: bytes | None = None, storage: DualStorage | None = None, *
     backends = _backends(storage)
     if not backends:
         return {"ok": False, "message": "FTP/S3 não configurados."}
-    if not force and not _state["armed"]:
+    if not force:  # nunca sobrescreve uma versão que este banco não conhece (outro computador/site, reinício)
         remote = remote_manifest(storage)
         if remote and remote.get("version") not in known_versions():
+            _state["armed"] = False
             _set_problem("blocked", f"O servidor tem a versão {remote.get('version')}, diferente do banco local.")
             return {"ok": False, "blocked": True, "remote": remote,
                     "message": "Envio bloqueado: o servidor tem uma versão diferente do banco local. "
@@ -251,7 +282,7 @@ def push_remote(data: bytes | None = None, storage: DualStorage | None = None, *
         _clear_problem()
         _state.update(last_ok=now, last_hash=manifest["sha256"], armed=True, last_manifest=manifest)
         db.set_setting("backup_last_push", json.dumps({**manifest, **results}, ensure_ascii=False))
-        _state["last_hash"] = _sha(snapshot())  # a linha acima alterou o banco
+        _mark_synced()  # a linha acima alterou o banco
     _state["last_error"] = "; ".join(errors) or None
     if not ok:
         _set_problem(classify(errors[0]), "; ".join(errors))
@@ -291,8 +322,47 @@ def restore_from_remote(key: str = LATEST_KEY, storage: DualStorage | None = Non
         version = (remote_manifest(storage) or {}).get("version", version)
     info = restore(data, origin="servidor FTP/S3", version=version)
     _clear_problem()
-    _state["armed"] = key == LATEST_KEY  # restaurou a mais recente: pode voltar a enviar automaticamente
+    _state["armed"] = True
+    if key != LATEST_KEY:  # voltar a uma versão antiga = publicá-la como a mais recente (as outras ficam no histórico)
+        push_remote(storage=storage, force=True)
     return info
+
+
+def sync(storage: DualStorage | None = None) -> str:
+    """Sincroniza com o servidor: 'pushed', 'pulled', 'conflict', 'unchanged' ou 'error'.
+
+    - versão remota conhecida e banco local alterado -> envia;
+    - versão remota desconhecida (gravada por outro computador/site) e banco local sem alterações -> baixa;
+    - versão remota desconhecida e banco local alterado -> conflito: pausa e alerta o administrador.
+    """
+    storage = storage or DualStorage()
+    if not _backends(storage):
+        return "unchanged"
+    try:
+        remote = remote_manifest(storage)
+    except Exception as exc:  # noqa: BLE001
+        _set_problem(classify(str(exc)), str(exc))
+        return "error"
+    if remote is None and not any(b.test()[0] for b in _backends(storage)):
+        health_check(storage)
+        return "error"
+    changed = local_changed()
+    if remote and remote.get("version") not in known_versions():
+        if changed:
+            _state["armed"] = False
+            _set_problem("blocked", f"O servidor tem a versão {remote.get('version')} (gravada em outro lugar) e "
+                                    "este banco também tem lançamentos novos.")
+            return "conflict"
+        restore(fetch_remote(LATEST_KEY, storage) or b"", origin="servidor FTP/S3 (sincronização automática)",
+                version=remote.get("version"))
+        _clear_problem()
+        _state["armed"] = True
+        _state["pulled"] = datetime.now()
+        return "pulled"
+    _clear_problem(include_startup=False)
+    if changed:
+        return "pushed" if push_remote(storage=storage)["ok"] else "error"
+    return "unchanged"
 
 
 def restore_latest_remote(storage: DualStorage | None = None) -> bool:
@@ -329,7 +399,7 @@ def restore_latest_remote(storage: DualStorage | None = None) -> bool:
 
 
 def maybe_auto_backup(force: bool = False, background: bool = True) -> None:
-    """Chamado a cada interação; envia o banco se mudou, no máximo a cada AUTO_INTERVAL_S segundos."""
+    """Chamado a cada interação; sincroniza com o FTP no máximo a cada AUTO_INTERVAL_S segundos."""
     if not force and time.time() - _state["last_check"] < AUTO_INTERVAL_S:
         return
     _state["last_check"] = time.time()
@@ -338,17 +408,9 @@ def maybe_auto_backup(force: bool = False, background: bool = True) -> None:
         if not _lock.acquire(blocking=False):
             return
         try:
-            storage = DualStorage()
-            if not _backends(storage):
-                return
-            data = snapshot()
-            if _sha(data) != _state["last_hash"]:
-                res = push_remote(data, storage)
-                if res.get("blocked"):
-                    _state["last_error"] = res["message"]
-            elif _state["problem"] or time.time() - _state["last_health"] > HEALTH_INTERVAL_S:
-                _state["last_health"] = time.time()
-                health_check(storage)
+            if _state["problem"] and _state["problem"].get("startup"):
+                return  # banco não restaurado no reinício: nada sincroniza até o admin restaurar
+            sync()
         except Exception as exc:  # noqa: BLE001
             _state["last_error"] = str(exc)
         finally:

@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from erp import auth
-from erp.config import MODULES, ROLE_ADMIN, ROLES
+from erp.config import DOC_AREAS, MODULES, ROLE_ADMIN, ROLES
 from erp.ui.common import current_user, header
 
 
@@ -46,6 +46,8 @@ def render() -> None:
         st.success("Permissões atualizadas — valem no próximo carregamento de página de cada usuário.")
         st.rerun()
 
+    _doc_access(users)
+
     c1, c2 = st.columns(2)
     with c1, st.form("new_user", clear_on_submit=True):
         st.subheader("➕ Novo usuário")
@@ -68,3 +70,26 @@ def render() -> None:
         if st.form_submit_button("Definir senha provisória"):
             auth.set_temporary_password(opts[sel], temp)
             st.success(f"Senha provisória definida ({temp}). Troca obrigatória no próximo login.")
+
+
+def _doc_access(users: list[dict]) -> None:
+    st.subheader("📂 Acesso a documentos por usuário")
+    st.caption("Marque as pastas do GED e as categorias de leis que cada usuário pode ver e baixar "
+               "(além do módulo estar liberado na matriz acima). Administradores veem tudo.")
+    others = [u for u in users if u["role"] != ROLE_ADMIN]
+    if not others:
+        st.info("Cadastre usuários para definir o acesso aos documentos.")
+        return
+    rows = []
+    for u in others:
+        areas = auth.doc_areas(u)
+        rows.append({"id": u["id"], "Usuário": u["username"], **{label: key in areas for key, label in DOC_AREAS.items()}})
+    edited = st.data_editor(
+        pd.DataFrame(rows), hide_index=True, width="stretch", key="doc_matrix", disabled=["id", "Usuário"],
+        column_config={"id": None, **{label: st.column_config.CheckboxColumn(label) for label in DOC_AREAS.values()}},
+    )
+    if st.button("💾 Salvar acesso a documentos"):
+        for _, r in edited.iterrows():
+            auth.set_doc_areas(int(r["id"]), [key for key, label in DOC_AREAS.items() if r[label]])
+        st.success("Acesso a documentos atualizado.")
+        st.rerun()

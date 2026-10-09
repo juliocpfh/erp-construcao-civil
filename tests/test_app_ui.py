@@ -71,3 +71,16 @@ def test_almoxarife_inventory_page(seeded):
     at = _page("page_inventory", "almoxarife")
     assert not at.exception
     assert any("RUPTURA" in m.value for m in at.markdown)  # alerta piscante de lead time
+
+
+def test_ged_shows_only_allowed_folders(seeded):
+    uid = auth.authenticate("visualizador", "visual123")["id"]
+    auth.set_permissions(uid, ["ged", "ambiental"])
+    auth.set_doc_areas(uid, ["ged:Projetos", "legal:ABNT"])
+    at = _page("page_ged", "visualizador")
+    assert not at.exception
+    labels = [t.label for t in at.tabs]
+    assert labels == ["📁 Projetos"]
+    at = _page("page_environment", "visualizador")
+    assert not at.exception
+    assert any("ABNT" in c.value for c in at.caption)
