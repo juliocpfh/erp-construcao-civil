@@ -14,7 +14,7 @@ from erp.ui import (  # noqa: E402
     page_admin, page_connections, page_contacts, page_dashboard, page_environment, page_fiscal, page_ged,
     page_inventory, page_media, page_project, page_rdo, page_schedule, page_wbs,
 )
-from erp.ui.common import inject_css  # noqa: E402
+from erp.ui.common import ftp_problem_alert, inject_css  # noqa: E402
 
 RENDERERS = {
     "painel": page_dashboard.render, "eap": page_wbs.render, "cronograma": page_schedule.render,
@@ -61,10 +61,10 @@ def landing() -> None:
     st.title("🏗️ ERP de Gestão de Obras · PMO de Engenharia Civil")
     if msg := st.session_state.pop("restore_msg", None):
         st.success(msg)
-    startup = backup.status()["startup"]
-    if startup and startup.get("configured") and not startup.get("ok") and not startup.get("reachable", False):
-        st.warning("O banco não pôde ser restaurado do servidor FTP. O administrador deve entrar e conferir o "
-                   "endereço do FTP em **Projeto e Backup do Banco**.")
+    problem = backup.connection_problem()
+    if problem and problem.get("startup"):
+        st.warning("O banco de dados não pôde ser carregado do servidor FTP. O administrador deve entrar para "
+                   "ver o passo a passo de correção.")
     info = project_info()
     st.markdown(f"**{info['name']}**" + (f" · {info['location']}" if info["location"] else ""))
     st.markdown("Faça login na barra lateral (no celular, toque em **›** no canto superior esquerdo).")
@@ -117,17 +117,14 @@ def main() -> None:
         change_password_screen(user)
         return
 
-    startup = backup.status()["startup"]
-    if user["role"] == ROLE_ADMIN and startup and startup.get("configured") and not startup.get("ok") \
-            and not startup.get("reachable", False):
-        st.warning("⚠️ " + startup["message"] + " Abra **Projeto e Backup do Banco** para corrigir o FTP e restaurar.")
-
     allowed = auth.allowed_pages(user)
     catalog = {**MODULES, **ADMIN_PAGES}
     nav: dict[str, list] = {}
+    by_key = {}
     for section, keys in SECTIONS.items():
         pages = [st.Page(RENDERERS[k], title=catalog[k][0], icon=catalog[k][1], url_path=k)
                  for k in keys if k in allowed]
+        by_key.update({p.url_path: p for p in pages})
         if pages:
             nav[section] = pages
     if not nav:
@@ -135,6 +132,8 @@ def main() -> None:
         return
     inject_css()
     page = st.navigation(nav, expanded=user["role"] == ROLE_ADMIN)
+    if page.url_path != "projeto":  # na própria página do FTP o passo a passo aparece no topo
+        ftp_problem_alert(backup.connection_problem(), user["role"] == ROLE_ADMIN, by_key.get("projeto"))
     page.run()
     backup.maybe_auto_backup()  # cópia do banco no S3/FTP, se configurados e se houve alteração
 

@@ -118,3 +118,81 @@ def empty_project_guide(context: str = "") -> None:
             "5. **Agenda**: importe ou cadastre os contatos (fornecedores, equipe, órgãos).\n"
             "6. No dia a dia: **RDO**, **NFs**, fotos e checklist ambiental alimentam os indicadores.\n\n"
             "Os indicadores (IDC, IDP, Curva S, Gantt) aparecem assim que houver tarefas no cronograma.")
+
+
+FTP_PROBLEM_TITLES = {
+    "unreachable": "🔌 SEM CONEXÃO COM O FTP — o endereço pode ter mudado",
+    "auth": "🔑 O FTP RECUSOU O LOGIN — usuário ou senha mudaram",
+    "write": "🚫 O FTP NÃO PERMITE GRAVAR na pasta de backup",
+    "blocked": "⚠️ BACKUP PAUSADO — o FTP tem uma versão diferente do banco",
+}
+
+
+def ftp_steps(problem: dict) -> list[str]:
+    """Passo a passo para resolver o problema de conexão com o FTP, conforme o tipo de falha."""
+    kind = problem["kind"]
+    page = "**Administração → Projeto e Backup do Banco → aba Banco no FTP / Backup**"
+    if kind == "blocked":
+        return [
+            f"Abra {page} e veja o quadro **Versão mais recente no servidor** (data, obra, nº de tarefas/RDOs).",
+            "Se a versão do servidor é a correta (a obra de verdade): clique **⬇️ Restaurar a última versão do "
+            "servidor**. O app volta com todos os dados.",
+            "Se o banco atual é o correto: marque **Substituir a versão do servidor** e clique **⬆️ Enviar backup "
+            "agora** (a versão antiga continua no histórico do FTP).",
+            "Confira que o quadro **Último backup enviado** ficou verde com “conferido ✅”.",
+        ]
+    first = {
+        "unreachable": "Descubra o endereço atual do FTP: no painel da hospedagem do FTP, ou, se o FTP fica na sua "
+                       "casa/escritório, o IP público atual da internet de lá (abra meuip.com.br num computador "
+                       "dessa rede). Confira também se o servidor/roteador está ligado.",
+        "auth": "Confirme o usuário e a senha atuais do FTP (painel da hospedagem ou quem administra o servidor).",
+        "write": "Peça a quem administra o FTP permissão de gravação para esse usuário na pasta base "
+                 "(ex.: /backup_obra), ou escolha outra pasta em que ele possa gravar.",
+    }[kind]
+    field = {"unreachable": "**Endereço** (e a **Porta**, se mudou)", "auth": "**Usuário** e **Senha**",
+             "write": "**Pasta base no FTP**"}[kind]
+    steps = [
+        first,
+        f"Abra {page}.",
+        f"Em **Configuração e teste do FTP**, atualize {field} e clique **🔌 Testar acesso**. Só avance quando "
+        "aparecer a mensagem verde **“Gravação e leitura confirmadas”**.",
+        "Clique **💾 Testar e salvar**.",
+    ]
+    if problem.get("startup"):
+        steps.append("**Importante:** o app reiniciou sem conseguir baixar o banco. **Não lance dados antes deste "
+                     "passo:** clique **⬇️ Restaurar a última versão do servidor** e confira o quadro **Última versão "
+                     "restaurada** (data e obra). Depois faça login de novo.")
+    else:
+        steps.append("Clique **⬆️ Enviar backup agora** e confira que o quadro **Último backup enviado** ficou verde "
+                     "com “conferido ✅”.")
+    if kind != "write":
+        steps.append("Se o app roda no **Streamlit Cloud**: abra **share.streamlit.io → seu app → ⋮ → Settings → "
+                     "Secrets**, corrija `FTP_HOST`/`FTP_PORT`" + ("/`FTP_USER`/`FTP_PASSWORD`" if kind == "auth" else "")
+                     + " e clique **Save**. Sem isso, o próximo reinício do app volta a usar o dado antigo.")
+    if kind == "unreachable":
+        steps.append("Para não passar por isso de novo: crie um endereço fixo gratuito (DuckDNS ou No-IP) que "
+                     "acompanha a troca de IP e use-o no lugar do número do IP.")
+    return steps
+
+
+def ftp_problem_alert(problem: dict | None, admin: bool, fix_page=None, expanded: bool = False) -> None:
+    """Alerta piscante em todas as telas quando a conexão com o FTP do banco falha, com o passo a passo."""
+    if not problem:
+        return
+    since = problem["since"].strftime("%d/%m %H:%M") if problem.get("since") else ""
+    title = FTP_PROBLEM_TITLES.get(problem["kind"], FTP_PROBLEM_TITLES["unreachable"])
+    if not admin:
+        detail = ("O app reiniciou sem conseguir carregar o banco de dados do servidor: NÃO lance dados até o "
+                  "administrador resolver. " if problem.get("startup") else
+                  "Os lançamentos continuam sendo gravados, mas a cópia de segurança no FTP está parada. ")
+        blink_alert(title, detail + "Avise o administrador do sistema.", level="danger" if problem.get("startup") else "warning")
+        return
+    detail = (f"Desde {since}. " if since else "") + (
+        "O app reiniciou e NÃO conseguiu restaurar o banco do FTP." if problem.get("startup")
+        else "Os dados continuam salvos aqui, mas a cópia de segurança no FTP está parada até você corrigir.")
+    blink_alert(title, detail)
+    with st.expander("🛠️ Passo a passo para corrigir", expanded=expanded):
+        st.markdown("\n".join(f"{i}. {s}" for i, s in enumerate(ftp_steps(problem), 1)))
+        st.caption(f"Erro técnico: {problem.get('detail', '-')}")
+        if fix_page is not None:
+            st.page_link(fix_page, label="Ir para Banco no FTP / Backup", icon=":material/settings_backup_restore:")

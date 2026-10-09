@@ -28,11 +28,58 @@ LATEST_KEY = f"{REMOTE_DIR}/erp_obra_latest.db"
 MANIFEST_KEY = f"{REMOTE_DIR}/latest.json"
 SQLITE_HEADER = b"SQLite format 3\x00"
 AUTO_INTERVAL_S = 120
+HEALTH_INTERVAL_S = 600  # sem alterações, confere a conexão com o FTP a cada 10 min
 ERP_TABLES = {"users", "settings", "tasks", "wbs"}
 
 _lock = threading.Lock()
 _state: dict = {"last_check": 0.0, "last_hash": None, "last_ok": None, "last_error": None,
-                "armed": False, "startup": None}
+                "armed": False, "startup": None, "problem": None, "last_health": 0.0}
+
+
+# --------------------------------------------------------------------------- problemas de conexão
+def classify(text: str) -> str:
+    """unreachable (endereço/porta/rede) · auth (usuário/senha) · write (sem permissão de gravação)."""
+    t = (text or "").lower()
+    if "530" in t or "login" in t or "authentication" in t or "senha" in t or "password" in t:
+        return "auth"
+    if "550" in t or "553" in t or "permission" in t or "permissão" in t:
+        return "write"
+    return "unreachable"
+
+
+def _set_problem(kind: str, detail: str, startup: bool = False) -> None:
+    current = _state["problem"]
+    _state["problem"] = {
+        "kind": kind, "detail": detail,
+        "since": current["since"] if current and current["kind"] == kind else datetime.now(),
+        "startup": startup or bool(current and current.get("startup")),
+    }
+
+
+def _clear_problem(include_startup: bool = True) -> None:
+    if _state["problem"] and (include_startup or not _state["problem"].get("startup")):
+        _state["problem"] = None
+
+
+def connection_problem() -> dict | None:
+    """Problema ativo com o servidor de backup (None se tudo certo)."""
+    return _state["problem"]
+
+
+def health_check(storage: DualStorage | None = None) -> bool:
+    """Login no FTP/S3; registra ou limpa o problema de conexão."""
+    backends = _backends(storage or DualStorage())
+    if not backends:
+        return False
+    errors = []
+    for backend in backends:
+        ok, msg = backend.test()
+        if ok:
+            _clear_problem(include_startup=False)
+            return True
+        errors.append(msg)
+    _set_problem(classify(errors[0]), "; ".join(errors))
+    return False
 
 
 def _sha(data: bytes) -> str:
@@ -177,6 +224,7 @@ def push_remote(data: bytes | None = None, storage: DualStorage | None = None, *
     if not force and not _state["armed"]:
         remote = remote_manifest(storage)
         if remote and remote.get("version") not in known_versions():
+            _set_problem("blocked", f"O servidor tem a versão {remote.get('version')}, diferente do banco local.")
             return {"ok": False, "blocked": True, "remote": remote,
                     "message": "Envio bloqueado: o servidor tem uma versão diferente do banco local. "
                                "Restaure-a ou confirme a substituição."}
@@ -200,10 +248,13 @@ def push_remote(data: bytes | None = None, storage: DualStorage | None = None, *
             errors.append(f"{name.upper()}: {exc}")
     ok = "ok" in results.values()
     if ok:
+        _clear_problem()
         _state.update(last_ok=now, last_hash=manifest["sha256"], armed=True, last_manifest=manifest)
         db.set_setting("backup_last_push", json.dumps({**manifest, **results}, ensure_ascii=False))
         _state["last_hash"] = _sha(snapshot())  # a linha acima alterou o banco
     _state["last_error"] = "; ".join(errors) or None
+    if not ok:
+        _set_problem(classify(errors[0]), "; ".join(errors))
     msg = (f"Backup {version} enviado e conferido (SHA-256) em: "
            + ", ".join(k.upper() for k, v in results.items() if v == "ok")) if ok else "Falha no backup: " + "; ".join(errors)
     if ok and errors:
@@ -239,6 +290,7 @@ def restore_from_remote(key: str = LATEST_KEY, storage: DualStorage | None = Non
     if key == LATEST_KEY:
         version = (remote_manifest(storage) or {}).get("version", version)
     info = restore(data, origin="servidor FTP/S3", version=version)
+    _clear_problem()
     _state["armed"] = key == LATEST_KEY  # restaurou a mais recente: pode voltar a enviar automaticamente
     return info
 
@@ -261,6 +313,9 @@ def restore_latest_remote(storage: DualStorage | None = None) -> bool:
                           message="Nenhum backup encontrado no servidor (primeiro uso)." if reachable
                           else "Servidor FTP/S3 inacessível: banco NÃO restaurado. Confira o endereço do FTP.")
             _state["armed"] = reachable and manifest is None
+            if not reachable:
+                detail = "; ".join(b.test()[1] for b in _backends(storage))
+                _set_problem(classify(detail), detail, startup=True)
         else:
             info = restore(data, origin="servidor FTP/S3 (automático na inicialização)",
                            version=(manifest or {}).get("version"))
@@ -268,6 +323,7 @@ def restore_latest_remote(storage: DualStorage | None = None) -> bool:
             status.update(ok=True, message=f"Banco restaurado do servidor: versão {info['version']}.", info=info)
     except Exception as exc:  # noqa: BLE001
         status.update(ok=False, message=f"Falha ao restaurar do servidor: {exc}")
+        _set_problem(classify(str(exc)), str(exc), startup=True)
     _state["startup"] = status
     return bool(status.get("ok"))
 
@@ -290,6 +346,9 @@ def maybe_auto_backup(force: bool = False, background: bool = True) -> None:
                 res = push_remote(data, storage)
                 if res.get("blocked"):
                     _state["last_error"] = res["message"]
+            elif _state["problem"] or time.time() - _state["last_health"] > HEALTH_INTERVAL_S:
+                _state["last_health"] = time.time()
+                health_check(storage)
         except Exception as exc:  # noqa: BLE001
             _state["last_error"] = str(exc)
         finally:
@@ -308,5 +367,6 @@ def arm(value: bool = True) -> None:
 def status() -> dict:
     push = db.get_setting("backup_last_push")
     return {"last_ok": _state["last_ok"], "last_error": _state["last_error"], "armed": _state["armed"],
+            "problem": _state["problem"],
             "startup": _state["startup"], "last_push": json.loads(push) if push else None,
             "db_path": str(db_path())}

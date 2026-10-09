@@ -10,7 +10,7 @@ from erp.security import password_policy_errors
 from erp.services import backup, project
 from erp.settings_store import load_connection_settings, mask, write_env
 from erp.storage import FTPBackend
-from erp.ui.common import current_user, header
+from erp.ui.common import current_user, ftp_problem_alert, header
 
 CONFIRM_WORD = "APAGAR"
 
@@ -71,6 +71,7 @@ def _backup() -> None:
                 "(no máximo a cada 2 minutos), conferida byte a byte. Ao reiniciar vazio, o app restaura a última versão.")
     for kind, msg in st.session_state.pop("ftp_flash", []):
         getattr(st, kind)(msg)
+    ftp_problem_alert(backup.connection_problem(), admin=True, expanded=True)
     _status_panel()
     st.divider()
     _ftp_form()
@@ -145,6 +146,7 @@ def _ftp_form() -> None:
             ok, msg = FTPBackend(values).test_write()
         if save and ok:
             write_env(values)
+            backup.health_check()  # limpa o alerta de conexão (o de reinício só some após restaurar)
             flash = [("success", msg), ("success", "Configuração do FTP salva (criptografada).")]
             remote = backup.remote_manifest()
             if remote:
@@ -172,6 +174,15 @@ def _remote_actions() -> None:
     st.markdown("##### ☁️ Backup e restauração pelo servidor")
     if not backup.remote_configured():
         st.info("Configure o FTP acima para habilitar.")
+        return
+    if st.button("🩺 Verificar conexão agora"):
+        ok = backup.health_check()
+        st.session_state["ftp_flash"] = [("success", "Conexão com o FTP OK.")] if ok else []
+        st.rerun()
+    problem = backup.connection_problem()
+    if problem and problem["kind"] in ("unreachable", "auth", "write"):
+        st.info("Envio e restauração ficam disponíveis assim que o teste de acesso ao FTP passar "
+                "(siga o passo a passo no topo da página).")
         return
     remote = backup.remote_manifest()
     if remote:

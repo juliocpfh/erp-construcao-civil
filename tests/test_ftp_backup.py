@@ -83,3 +83,68 @@ def test_unreachable_ftp_on_startup_is_reported(empty_db, ftp_server):
     assert st["configured"] and not st["ok"] and not st["reachable"]
     assert "inacessível" in st["message"]
     assert not backup.status()["armed"]
+
+
+def test_connection_loss_alert_lifecycle(empty_db, ftp_server):
+    from erp.ui.common import ftp_steps
+
+    settings, _ = ftp_server
+    good = DualStorage(settings=settings)
+    project.create_blank_project("Obra", admin_password="Senha1234")
+    assert backup.push_remote(storage=good)["ok"]
+    assert backup.connection_problem() is None
+
+    # FTP mudou de endereço durante o uso: envio falha -> alerta "unreachable"
+    db.set_setting("project_location", "x")
+    res = backup.push_remote(storage=DualStorage(settings={**settings, "FTP_PORT": "1"}))
+    assert not res["ok"]
+    problem = backup.connection_problem()
+    assert problem["kind"] == "unreachable" and not problem["startup"]
+    steps = " ".join(ftp_steps(problem))
+    assert "Testar acesso" in steps and "Secrets" in steps and "Enviar backup agora" in steps
+
+    # senha trocada -> alerta "auth"
+    assert not backup.health_check(DualStorage(settings={**settings, "FTP_PASSWORD": "velha"}))
+    assert backup.connection_problem()["kind"] == "auth"
+
+    # corrigido: verificação limpa o alerta
+    assert backup.health_check(good)
+    assert backup.connection_problem() is None
+
+
+def test_startup_alert_requires_restore(empty_db, ftp_server):
+    from erp.ui.common import ftp_steps
+
+    settings, _ = ftp_server
+    good = DualStorage(settings=settings)
+    project.create_blank_project("Obra real", admin_password="Senha1234")
+    assert backup.push_remote(storage=good)["ok"]
+    project.wipe_all()
+    backup._state.update(armed=False, problem=None)
+
+    assert not backup.restore_latest_remote(DualStorage(settings={**settings, "FTP_PORT": "1"}))
+    problem = backup.connection_problem()
+    assert problem["startup"] and problem["kind"] == "unreachable"
+    assert "Restaurar a última versão do servidor" in " ".join(ftp_steps(problem))
+
+    assert backup.health_check(good)  # conexão volta, mas o banco ainda não foi restaurado
+    assert backup.connection_problem()["startup"]
+    backup.restore_from_remote(storage=good)
+    assert backup.connection_problem() is None
+    assert project.project_info()["name"] == "Obra real"
+
+
+def test_alert_shown_on_every_page(empty_db):
+    from streamlit.testing.v1 import AppTest
+
+    project.create_blank_project("Obra", admin_password="Senha1234", must_change_password=False)
+    script = ("from datetime import datetime\nfrom erp.services import backup\nfrom erp.ui.common import ftp_problem_alert\n"
+              "ftp_problem_alert({'kind': 'unreachable', 'detail': 'timed out', 'since': datetime.now(), "
+              "'startup': False}, admin={admin})\n")
+    at = AppTest.from_string(script.replace("{admin}", "True"), default_timeout=30).run()
+    assert not at.exception
+    assert any("SEM CONEXÃO COM O FTP" in m.value for m in at.markdown)
+    assert any("Testar acesso" in m.value for m in at.markdown)
+    at = AppTest.from_string(script.replace("{admin}", "False"), default_timeout=30).run()
+    assert any("Avise o administrador" in m.value for m in at.markdown)
+    assert not any("Testar acesso" in m.value for m in at.markdown)
