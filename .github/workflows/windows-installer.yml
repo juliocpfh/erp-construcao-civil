@@ -1,9 +1,7 @@
 name: Instalador Windows
 
+# Gerado só quando pedido (Actions > Instalador Windows > Run workflow); o dia a dia é no site.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md", ".devcontainer/**"]
   workflow_dispatch:
 
 permissions:

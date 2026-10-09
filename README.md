@@ -52,8 +52,8 @@ O SQLite trabalha no disco do servidor do app e é copiado para `<pasta base>/ba
 ## Instalador para Windows (.exe)
 
 Baixe **`ERP-Obras-Setup.exe`** na release **"ERP Obras para Windows"** do GitHub
-(`Releases → instalador-windows`), gerada automaticamente a cada atualização do `main` pelo workflow
-`.github/workflows/windows-installer.yml`. O instalador não pede administrador e já inclui:
+(`Releases → instalador-windows`), gerada **sob demanda** pelo workflow
+`.github/workflows/windows-installer.yml` (Actions → Instalador Windows → Run workflow). O instalador não pede administrador e já inclui:
 Python, todas as bibliotecas, **Tesseract com português (OCR de notas fiscais)** e ffmpeg.
 
 - Atalho **ERP Obras** na área de trabalho: abre o sistema no navegador (feche a janela preta para encerrar).
