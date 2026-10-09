@@ -12,6 +12,10 @@ opencv-python-headless>=4.10
 pytesseract>=0.3.10
 pillow>=10.4
 
+# NF em PDF: texto do PDF (pypdf) e página como imagem para OCR de PDF escaneado (pypdfium2)
+pypdf>=4.3
+pypdfium2>=4.30
+
 # Relatórios PDF
 reportlab>=4.2
 

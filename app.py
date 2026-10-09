@@ -12,20 +12,20 @@ from erp.services.project import project_info  # noqa: E402
 from erp.security import password_policy_errors  # noqa: E402
 from erp.ui import (  # noqa: E402
     page_admin, page_connections, page_contacts, page_dashboard, page_environment, page_fiscal, page_ged,
-    page_inventory, page_media, page_project, page_rdo, page_schedule, page_wbs,
+    page_inventory, page_media, page_nfs, page_project, page_rdo, page_schedule, page_wbs,
 )
 from erp.ui import account_screens  # noqa: E402
 from erp.ui.common import ftp_problem_alert, inject_css  # noqa: E402
 
 RENDERERS = {
     "painel": page_dashboard.render, "eap": page_wbs.render, "cronograma": page_schedule.render,
-    "rdo": page_rdo.render, "fiscal": page_fiscal.render, "estoque": page_inventory.render,
+    "rdo": page_rdo.render, "nfs": page_nfs.render, "fiscal": page_fiscal.render, "estoque": page_inventory.render,
     "midia": page_media.render, "ambiental": page_environment.render, "ged": page_ged.render,
     "contatos": page_contacts.render, "usuarios": page_admin.render, "conexoes": page_connections.render,
     "projeto": page_project.render,
 }
 SECTIONS = {
-    "Gestão": ["painel", "eap", "cronograma", "fiscal"],
+    "Gestão": ["painel", "eap", "cronograma", "nfs", "fiscal"],
     "Campo": ["rdo", "estoque", "midia", "ambiental"],
     "Documentos": ["ged", "contatos"],
     "Administração": ["projeto", "usuarios", "conexoes"],

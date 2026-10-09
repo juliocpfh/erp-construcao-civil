@@ -1,217 +1,26 @@
-"""Comprovação fiscal: NF + foto do produto, OCR, aprovação (CR), BDI, cotações e EVM."""
+"""Tributos, BDI, cotações e custos (EVM). O lançamento e a aprovação de NFs ficam em page_nfs."""
 from __future__ import annotations
-
-from datetime import date
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from erp import auth, db
-from erp.services import evm, finance, inventory, nf_import, ocr
-from erp.storage import load_media, store_media
+from erp import db
+from erp.services import evm, finance
 from erp.ui import charts
-from erp.ui.common import blink_alert, can_edit, current_user, header, money, money_short, read_only_notice, username
-
-KINDS = ["Material", "Serviço", "Material + Mão de obra"]
-AUTO = "➕ Cadastrar automaticamente"
-
-
-def _items_frame(res: dict | None, mat_names: list[str], materials: list[dict]) -> pd.DataFrame:
-    """Itens lidos da NF já casados com os materiais existentes (ou marcados para cadastro automático)."""
-    cols = ["Descrição", "Quantidade", "Unidade", "Preço unitário", "Material", "Código fornecedor"]
-    found = (res or {}).get("items") or []
-    if not found:
-        return pd.DataFrame({c: pd.Series([], dtype="float" if c in ("Quantidade", "Preço unitário") else "object")
-                             for c in cols})
-    by_id = {m["id"]: label for m, label in zip(materials, mat_names)}
-    resolved = nf_import.resolve_items(found, st.session_state.get("nf_cnpj"))
-    return pd.DataFrame([{"Descrição": it["description"], "Quantidade": it["quantity"], "Unidade": it["unit"],
-                          "Preço unitário": it["unit_price"], "Material": by_id.get(it["material_id"], AUTO),
-                          "Código fornecedor": it.get("supplier_code", "")} for it in resolved], columns=cols)
+from erp.ui.common import blink_alert, can_edit, header, money, money_short
+from erp.ui.page_nfs import KINDS
 
 
 def render() -> None:
-    header("Comprovação Fiscal, Tributos e OCR", "NF aprovada soma ao Custo Real (CR) e atualiza IDC, IDP e Curva S.")
-    tabs = st.tabs(["📸 Lançar NF (OCR)", "✅ Aprovação", "🧮 BDI & Tributos", "📨 Cotações", "📈 Custos (PMI)"])
+    header("Tributos, BDI & Custos", "Composição do BDI, cotações e custos (EVM). NFs ficam em Gestão de NFs.")
+    tabs = st.tabs(["🧮 BDI & Tributos", "📨 Cotações", "📈 Custos (PMI)"])
     with tabs[0]:
-        _launch() if can_edit() else read_only_notice()
-    with tabs[1]:
-        _approval()
-    with tabs[2]:
         _bdi()
-    with tabs[3]:
+    with tabs[1]:
         _quotes()
-    with tabs[4]:
+    with tabs[2]:
         _costs()
-
-
-def _launch() -> None:
-    st.caption(f"Motor de OCR: {'Tesseract disponível ✅' if ocr.ocr_available() else 'indisponível — cole o texto da NF para preenchimento automático'}")
-    c1, c2 = st.columns(2)
-    with c1:
-        use_cam = st.toggle("Usar câmera do celular", value=False, key="nf_cam")
-        nf_file = st.camera_input("Foto da Nota Fiscal") if use_cam else st.file_uploader(
-            "Foto/imagem da Nota Fiscal", type=["jpg", "jpeg", "png", "webp"], key="nf_up")
-    with c2:
-        prod_file = st.file_uploader("Foto do Produto/Serviço entregue", type=["jpg", "jpeg", "png", "webp"], key="prod_up")
-        if prod_file:
-            st.image(prod_file, width=260)
-    xml_file = st.file_uploader("XML da NF-e (opcional — leitura exata de fornecedor, valores e itens)", type=["xml"],
-                                key="nf_xml")
-    pasted = st.text_area("Texto da NF (opcional — usado quando não há OCR ou para conferência)", height=90, key="nf_text")
-
-    if st.button("🔍 Ler NF e preencher automaticamente", type="primary"):
-        if nf_file is None and not pasted and xml_file is None:
-            st.warning("Envie a foto da NF, o XML ou cole o texto.")
-        else:
-            with st.spinner("Lendo nota fiscal..."):
-                try:
-                    if xml_file is not None:
-                        parsed = nf_import.parse_nfe_xml(xml_file.getvalue())
-                        result = {"text": "", "engine": parsed["engine"], "fields": parsed["fields"],
-                                  "items": [i.as_dict() for i in parsed["items"]], "confidence": 1.0}
-                    else:
-                        result = ocr.read_invoice(nf_file.getvalue() if nf_file and not pasted else None, pasted or None)
-                except ValueError as exc:
-                    st.error(str(exc))
-                    return
-            st.session_state["ocr_result"] = result
-            st.session_state["nf_items_rev"] = st.session_state.get("nf_items_rev", 0) + 1
-            f = result["fields"]
-            st.session_state["nf_supplier"] = f["fornecedor"] or ""
-            st.session_state["nf_cnpj"] = f["cnpj"] or ""
-            st.session_state["nf_number"] = f["numero"] or ""
-            st.session_state["nf_value"] = float(f["valor"] or 0.0)
-            st.session_state["nf_issue"] = f["emissao"] or date.today()
-            st.session_state["nf_iss"] = float(f["iss"] or 0.0)
-            st.session_state["nf_inss"] = float(f["inss"] or 0.0)
-    res = st.session_state.get("ocr_result")
-    if res:
-        st.info(f"Leitura ({res['engine']}): {int(res['confidence'] * 3)}/3 campos-chave (Valor, Fornecedor, Emissão) "
-                f"identificados · {len(res.get('items', []))} item(ns) de material encontrado(s).")
-        with st.expander("Texto reconhecido"):
-            st.code(res["text"] or "(vazio)")
-
-    tasks = {f"{t['code']} · {t['name']}": t["id"] for t in db.query("SELECT id, code, name FROM tasks ORDER BY code")}
-    materials = db.query("SELECT id, code, name, unit, unit_cost FROM materials ORDER BY name")
-    mat_names = [f"{m['code']} · {m['name']} ({m['unit']})" for m in materials]
-    with st.form("nf_form"):
-        c1, c2, c3 = st.columns(3)
-        supplier = c1.text_input("Fornecedor (Razão social)", key="nf_supplier")
-        cnpj = c2.text_input("CNPJ", key="nf_cnpj")
-        number = c3.text_input("Número da NF", key="nf_number")
-        c1, c2, c3 = st.columns(3)
-        value = c1.number_input("Valor total (R$)", 0.0, 1e9, step=100.0, key="nf_value")
-        issue = c2.date_input("Emissão", key="nf_issue", format="DD/MM/YYYY")
-        kind = c3.selectbox("Tipo", KINDS)
-        c1, c2, c3 = st.columns(3)
-        iss = c1.number_input("ISS destacado (R$)", 0.0, 1e9, step=10.0, key="nf_iss")
-        inss = c2.number_input("Retenção INSS (R$)", 0.0, 1e9, step=10.0, key="nf_inss")
-        benefit = c3.text_input("Benefício fiscal", placeholder="Ex.: desoneração CPRB, redução de ISS")
-        task = st.selectbox("Tarefa do cronograma (centro de custo)", ["-"] + list(tasks))
-        st.markdown("**Itens de material** — materiais que ainda não existem são **cadastrados automaticamente** "
-                    "ao registrar a NF; a entrada no estoque acontece na aprovação/conferência.")
-        items = st.data_editor(_items_frame(res, mat_names, materials), num_rows="dynamic", hide_index=True,
-                               key=f"nf_items_{st.session_state.get('nf_items_rev', 0)}", width="stretch",
-                               column_config={
-                                   "Material": st.column_config.SelectboxColumn(options=[AUTO] + mat_names, required=True,
-                                                                                help="Deixe em 'cadastrar' para criar o material"),
-                                   "Quantidade": st.column_config.NumberColumn(min_value=0.0, format="%.3f"),
-                                   "Preço unitário": st.column_config.NumberColumn(min_value=0.0, format="R$ %.4f"),
-                                   "Código fornecedor": None})
-        approve_now = st.checkbox("Aprovar imediatamente (Administrador)", disabled=not auth.is_admin(current_user()))
-        submit = st.form_submit_button("💾 Registrar NF", type="primary")
-    if not submit:
-        return
-    if not supplier or value <= 0:
-        st.error("Fornecedor e valor são obrigatórios.")
-        return
-    for a in finance.invoice_tax_alerts(kind, value, iss, inss):
-        blink_alert("⚠️ Alerta fiscal: " + a, level="warning", blink=False)
-    nf_key = prod_key = None
-    storage_msgs = []
-    if nf_file is not None:
-        r = store_media(nf_file.getvalue(), getattr(nf_file, "name", "nf.jpg") or "nf.jpg", "notas-fiscais")
-        nf_key = r.key
-        storage_msgs.append(f"NF → S3: {r.s3} · FTP: {r.ftp}")
-    if prod_file is not None:
-        r = store_media(prod_file.getvalue(), prod_file.name, "fotos-produtos")
-        prod_key = r.key
-        storage_msgs.append(f"Produto → S3: {r.s3} · FTP: {r.ftp}")
-    res = st.session_state.get("ocr_result") or {}
-    inv_id = db.execute(
-        "INSERT INTO invoices(number, supplier_name, supplier_cnpj, issue_date, total_value, kind, iss_value, inss_value, "
-        "tax_benefit, task_id, status, nf_media_key, product_media_key, ocr_text, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,'Pendente',?,?,?,?)",
-        (number, supplier, cnpj, issue.isoformat(), value, kind, iss, inss, benefit, tasks.get(task), nf_key, prod_key,
-         res.get("text", ""), db.now_iso()))
-    rows = []
-    for r in items.to_dict("records"):
-        mat = r.get("Material") or AUTO
-        m = materials[mat_names.index(mat)] if mat in mat_names else None
-        desc = str(r.get("Descrição") or "").strip() or (m["name"] if m else "")
-        if not desc or not r.get("Quantidade"):
-            continue
-        rows.append({"description": desc, "quantity": float(r["Quantidade"]), "unit": r.get("Unidade") or (m["unit"] if m else "un"),
-                     "unit_price": float(r.get("Preço unitário") or (m["unit_cost"] if m else 0) or 0),
-                     "supplier_code": str(r.get("Código fornecedor") or ""), "material_id": m["id"] if m else None})
-    reg = nf_import.register_items(inv_id, rows, cnpj)
-    if approve_now:
-        inventory.approve_invoice(inv_id, username())
-    msg = f"NF registrada ({'aprovada e com entrada no estoque' if approve_now else 'pendente de aprovação'})."
-    if reg["created"]:
-        msg += f" {reg['created']} material(is) novo(s) cadastrado(s) automaticamente."
-    if reg["linked"]:
-        msg += f" {reg['linked']} item(ns) vinculado(s) a materiais existentes."
-    st.success(msg + (" " + " | ".join(storage_msgs) if storage_msgs else ""))
-    st.session_state["nf_items_rev"] = st.session_state.get("nf_items_rev", 0) + 1
-    st.session_state.pop("ocr_result", None)
-
-
-def _approval() -> None:
-    pending = db.query("SELECT i.*, t.code AS task_code FROM invoices i LEFT JOIN tasks t ON t.id = i.task_id "
-                       "WHERE status = 'Pendente' ORDER BY issue_date")
-    st.markdown(f"**{len(pending)} NF(s) pendente(s)**")
-    before = evm.evm_snapshot()
-    for inv in pending:
-        with st.container(border=True):
-            c1, c2 = st.columns([1, 2])
-            img = load_media(inv["nf_media_key"])
-            if img:
-                c1.image(img, caption="Nota fiscal", width="stretch")
-            prod = load_media(inv["product_media_key"])
-            if prod:
-                c1.image(prod, caption="Produto/serviço", width="stretch")
-            c2.markdown(f"**NF {inv['number']} · {inv['supplier_name']}**  \n{inv['supplier_cnpj'] or ''}  \n"
-                        f"Emissão {date.fromisoformat(inv['issue_date']):%d/%m/%Y} · {inv['kind']} · Tarefa {inv['task_code'] or '-'}")
-            c2.metric("Valor", money(inv["total_value"]))
-            c2.caption(f"ISS {money(inv['iss_value'])} · INSS {money(inv['inss_value'])} · {inv['tax_benefit'] or ''}")
-            for a in finance.invoice_tax_alerts(inv["kind"], inv["total_value"], inv["iss_value"], inv["inss_value"]):
-                c2.warning(a)
-            items = db.query_df("SELECT m.name AS Material, ii.quantity AS Qtd, m.unit AS Un, ii.unit_price AS 'Preço un.' "
-                                "FROM invoice_items ii JOIN materials m ON m.id = ii.material_id WHERE invoice_id = ?",
-                                (inv["id"],))
-            if not items.empty:
-                c2.dataframe(items, hide_index=True, width="stretch")
-            if can_edit():
-                b1, b2 = c2.columns(2)
-                if b1.button("✅ Aprovar", key=f"ap_{inv['id']}", type="primary"):
-                    inventory.approve_invoice(inv["id"], username())
-                    after = evm.evm_snapshot()
-                    st.toast(f"CR {money(before['CR'])} → {money(after['CR'])} · IDC {before['IDC']:.3f} → {after['IDC']:.3f}")
-                    st.rerun()
-                if b2.button("❌ Rejeitar", key=f"rj_{inv['id']}"):
-                    inventory.reject_invoice(inv["id"], username())
-                    st.rerun()
-    st.divider()
-    st.markdown("**Histórico de NFs**")
-    hist = db.query_df("SELECT i.issue_date AS Emissão, i.number AS NF, i.supplier_name AS Fornecedor, i.kind AS Tipo, "
-                       "t.code AS Tarefa, i.total_value AS Valor, i.iss_value AS ISS, i.inss_value AS INSS, i.status AS Status "
-                       "FROM invoices i LEFT JOIN tasks t ON t.id = i.task_id ORDER BY i.issue_date DESC")
-    st.dataframe(hist, hide_index=True, width="stretch", height=380,
-                 column_config={k: st.column_config.NumberColumn(format="R$ %.2f") for k in ("Valor", "ISS", "INSS")})
-
 
 def _bdi() -> None:
     p = finance.load_bdi_params()

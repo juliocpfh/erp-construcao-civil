@@ -11,7 +11,7 @@ from erp import auth, db
 from erp.services import backup, project
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
-PAGES = ["page_dashboard", "page_wbs", "page_schedule", "page_rdo", "page_fiscal", "page_inventory", "page_media",
+PAGES = ["page_dashboard", "page_wbs", "page_schedule", "page_rdo", "page_fiscal", "page_nfs", "page_inventory", "page_media",
          "page_environment", "page_ged", "page_contacts", "page_admin", "page_connections", "page_project"]
 
 

@@ -270,7 +270,7 @@ def seed_database(today: date | None = None, with_media: bool = True, rng_seed: 
     create_user("almoxarife", "campo123", ROLE_STOCK, "Luiz Fernando Wisniewski", contact_id=contact_ids["almox"])
     create_user("visualizador", "visual123", ROLE_VIEWER, "Diretoria (somente leitura)")
     create_user("fiscal.banco", "Prov@2026", ROLE_VIEWER, "Eng. Beatriz Lacerda Fontes", must_change_password=True,
-                permissions=["painel", "cronograma", "rdo", "fiscal"], contact_id=contact_ids["fiscal"])
+                permissions=["painel", "cronograma", "rdo", "nfs", "fiscal"], contact_id=contact_ids["fiscal"])
     create_user("eng.planejamento", "plan2026", ROLE_VIEWER, "Eng. Carla Mendes Ribeiro",
                 contact_id=contact_ids["eng_plan"])
     uid = create_user("almox.noturno", "campo456", ROLE_STOCK, "Vigia / Almoxarife Noturno")

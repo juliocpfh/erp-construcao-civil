@@ -120,7 +120,9 @@ def _parse_supplier(text: str) -> str | None:
 def parse_invoice_text(text: str) -> dict:
     text = text or ""
     cnpj = re.search(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}", text)
-    number = re.search(r"(?:N[ºO°]\.?|N[UÚ]MERO|NF-?e?\s*N?[ºO°]?)\s*[:\-]?\s*(\d{3,9})", text, flags=re.IGNORECASE)
+    # "Nº 000.004.521" (DANFE), "NF-e N. 4521", "Número: 123"
+    number = re.search(r"(?:N[ºO°]\.?|N[UÚ]MERO|NF-?e?\s*N?[ºO°.]*)\s*[:\-]?\s*(\d{1,3}(?:\.\d{3})+|\d{3,9})", text,
+                       flags=re.IGNORECASE)
     total = _find_money_after(
         [r"VALOR\s+TOTAL\s+DA\s+NOTA", r"VALOR\s+TOTAL\s+DO\s+SERVI[CÇ]O", r"VALOR\s+TOTAL", r"TOTAL\s+A\s+PAGAR",
          r"VALOR\s+L[IÍ]QUIDO", r"TOTAL"], text)
@@ -130,7 +132,7 @@ def parse_invoice_text(text: str) -> dict:
     return {
         "fornecedor": _parse_supplier(text),
         "cnpj": cnpj.group(0) if cnpj else None,
-        "numero": number.group(1) if number else None,
+        "numero": number.group(1).replace(".", "") if number else None,
         "valor": total,
         "emissao": issued,
         "iss": iss,
@@ -138,9 +140,56 @@ def parse_invoice_text(text: str) -> dict:
     }
 
 
+def is_pdf(data: bytes | None) -> bool:
+    return bool(data) and data[:5] == b"%PDF-"
+
+
+def pdf_page_images(pdf_bytes: bytes, max_pages: int = 3, scale: float = 2.5) -> list[bytes]:
+    """Páginas do PDF como PNG (para OCR de PDF escaneado e para mostrar a nota na tela)."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    pages = []
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        for i in range(min(len(doc), max_pages)):
+            buf = io.BytesIO()
+            doc[i].render(scale=scale).to_pil().save(buf, format="PNG")
+            pages.append(buf.getvalue())
+    finally:
+        doc.close()
+    return pages
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> tuple[str, str]:
+    """Texto da NF em PDF: lido direto do arquivo (DANFE gerado por sistema) ou por OCR das páginas (escaneado)."""
+    import io
+
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = "\n".join((page.extract_text() or "") for page in reader.pages[:5])
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"PDF inválido ou protegido: {exc}") from exc
+    if len(re.sub(r"\s", "", text)) >= 40:
+        return text, "texto do PDF"
+    if not ocr_available():
+        return text, "PDF escaneado (OCR indisponível)"
+    parts, engine = [], "indisponível"
+    for img in pdf_page_images(pdf_bytes):
+        t, engine = extract_text(img)
+        parts.append(t)
+    return "\n".join(parts), f"PDF escaneado · {engine}"
+
+
 def read_invoice(image_bytes: bytes | None = None, text: str | None = None) -> dict:
+    """Lê a NF a partir de foto, PDF (texto ou escaneado) ou texto colado."""
     engine = "texto informado"
-    if text is None and image_bytes is not None:
+    if text is None and is_pdf(image_bytes):
+        text, engine = extract_pdf_text(image_bytes)
+    elif text is None and image_bytes is not None:
         text, engine = extract_text(image_bytes)
     from erp.services.nf_import import parse_items_text
 

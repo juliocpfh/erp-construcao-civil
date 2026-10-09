@@ -9,7 +9,7 @@ from streamlit.testing.v1 import AppTest
 from erp import auth
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
-PAGES = ["page_dashboard", "page_wbs", "page_schedule", "page_rdo", "page_fiscal", "page_inventory", "page_media",
+PAGES = ["page_dashboard", "page_wbs", "page_schedule", "page_rdo", "page_fiscal", "page_nfs", "page_inventory", "page_media",
          "page_environment", "page_ged", "page_contacts", "page_admin", "page_connections", "page_project"]
 
 
@@ -55,7 +55,7 @@ def test_every_page_renders_for_admin(seeded, module):
     assert not at.exception, at.exception
 
 
-@pytest.mark.parametrize("module", ["page_dashboard", "page_fiscal", "page_rdo", "page_schedule"])
+@pytest.mark.parametrize("module", ["page_dashboard", "page_fiscal", "page_nfs", "page_rdo", "page_schedule"])
 def test_viewer_pages_are_read_only(seeded, module):
     at = _page(module, "visualizador")
     assert not at.exception, at.exception

@@ -80,9 +80,10 @@ Alternativa sem instalador: `iniciar.bat` (requer Python 3.12 instalado) ou `./i
    ocorrências, avanço físico e consumo. **Chuva Forte** (+1 dia nas tarefas externas ativas) ou
    problema em tarefa (+N dias) **recalculam o cronograma em tempo real** — a nova data final aparece
    antes mesmo de salvar. Painel **Baseline x Real** mostra onde se perdeu tempo e dinheiro.
-4. **Comprovação fiscal, tributos e OCR** — foto da NF (upload ou câmera do celular) + foto do
-   produto; OCR (OpenCV + Tesseract) preenche Valor, Fornecedor, Emissão, CNPJ, nº, ISS e INSS.
-   BDI pela fórmula do Acórdão TCU 2.622/2013 com tributos separados e campo de benefícios fiscais;
+4. **Gestão de NFs** e **Tributos, BDI & Custos** — NF em **PDF** (DANFE com texto ou escaneado),
+   foto (upload ou câmera do celular) ou **XML da NF-e**, + foto do produto; leitura do PDF/OCR
+   (OpenCV + Tesseract) preenche Valor, Fornecedor, Emissão, CNPJ, nº, ISS, INSS e os itens, que
+   cadastram materiais novos automaticamente; abas Incluir NF, Aprovação e Todas as NFs. BDI pela fórmula do Acórdão TCU 2.622/2013 com tributos separados e campo de benefícios fiscais;
    alertas em cotações/NFs de serviço sem destaque de ISS (LC 116/2003) e retenção de 11% de INSS
    (Lei 8.212/91, art. 31). NF aprovada soma ao **CR** e atualiza **IDC, IDP e Curva S (VP x VA x CR)**.
 5. **Almoxarifado inteligente** — NF aprovada dá entrada; RDO/consumo diário dá baixa; **alerta

@@ -343,6 +343,11 @@ def init_db(path: str | Path | None = None) -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {col} {ddl}')
+        if not conn.execute("SELECT 1 FROM settings WHERE key = 'perm_nfs_migrated'").fetchone():
+            # "Gestão de NFs" saiu do módulo fiscal: quem lançava NF continua com acesso
+            conn.execute("INSERT OR IGNORE INTO user_permissions(user_id, module) "
+                         "SELECT user_id, 'nfs' FROM user_permissions WHERE module = 'fiscal'")
+            conn.execute("INSERT INTO settings(key, value) VALUES ('perm_nfs_migrated', '1')")
         conn.commit()
     finally:
         conn.close()
