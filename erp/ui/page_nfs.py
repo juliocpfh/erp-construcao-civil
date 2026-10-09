@@ -238,7 +238,9 @@ def _approval() -> None:
                                 "FROM invoice_items ii JOIN materials m ON m.id = ii.material_id WHERE invoice_id = ?",
                                 (inv["id"],))
             if not items.empty:
-                c2.dataframe(items, hide_index=True, width="stretch")
+                c2.dataframe(items, hide_index=True, width="stretch",
+                             column_config={"Material": st.column_config.TextColumn(width="large"),
+                                            "Preço un.": st.column_config.NumberColumn(format="R$ %.2f")})
             if can_edit():
                 b1, b2 = c2.columns(2)
                 if b1.button("✅ Aprovar", key=f"ap_{inv['id']}", type="primary"):

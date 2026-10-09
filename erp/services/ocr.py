@@ -69,6 +69,24 @@ def parse_money(raw: str) -> float:
     return float(raw)
 
 
+def _money_below(label: str, text: str) -> float | None:
+    """DANFE: rótulos numa linha e valores na linha de baixo, na mesma ordem das colunas."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines[:-1]):
+        m = re.search(label, line, flags=re.IGNORECASE)
+        if not m or re.search(r"\d", line[m.end():]):
+            continue
+        values = re.findall(_MONEY, lines[i + 1])
+        if not values:
+            continue
+        col = min(int((m.start() + m.end()) / 2 / max(len(line), 1) * len(values)), len(values) - 1)
+        try:
+            return parse_money(values[col] if len(values) > 1 else values[0])
+        except ValueError:
+            continue
+    return None
+
+
 def _find_money_after(labels: list[str], text: str) -> float | None:
     for label in labels:
         m = re.search(label + r"[^\d\n]{0,40}" + _MONEY, text, flags=re.IGNORECASE)
@@ -76,7 +94,10 @@ def _find_money_after(labels: list[str], text: str) -> float | None:
             try:
                 return parse_money(m.group(1))
             except ValueError:
-                continue
+                pass
+        below = _money_below(label, text)
+        if below is not None:
+            return below
     return None
 
 
@@ -100,8 +121,13 @@ def _parse_date(text: str) -> date | None:
 _COMPANY_SUFFIX = r"\b(LTDA|L\s?T\s?D\s?A|S\.?\s?A\.?|EIRELI|ME|EPP|MEI|COM[EÉ]RCIO|IND[UÚ]STRIA)\b"
 
 
-def _parse_supplier(text: str) -> str | None:
-    lines = [ln.strip(" :-|") for ln in text.splitlines() if ln.strip()]
+def _parse_supplier(text: str, emitter: str | None = None) -> str | None:
+    # canhoto da DANFE: "RECEBEMOS DE <EMITENTE> OS PRODUTOS..." / "RECEBI(EMOS) DE <EMITENTE>, OS PRODUTOS..."
+    m = re.search(r"RECEB\w*\s*(?:\(EMOS\))?\s+DE\s+(.+?)(?:,|\s+OS\s+PRODUTOS|\s+A\s+IMPORT|\n)", text,
+                  flags=re.IGNORECASE)
+    if m and len(m.group(1).strip()) >= 3:
+        return re.sub(r"\bL[I1l]DA\b", "LTDA", m.group(1).strip())  # OCR costuma ler LTDA como LIDA
+    lines = [ln.strip(" :-|") for ln in (emitter or text).splitlines() if ln.strip()]
     for i, ln in enumerate(lines):
         m = re.match(r"(?:RAZ[AÃ]O\s+SOCIAL|EMITENTE|NOME/RAZ[AÃ]O SOCIAL|FORNECEDOR|PRESTADOR(?: DE SERVI[CÇ]OS)?)\s*[:\-]?\s*(.*)",
                      ln, flags=re.IGNORECASE)
@@ -117,9 +143,21 @@ def _parse_supplier(text: str) -> str | None:
     return None
 
 
+def _parse_cnpj(text: str, emitter: str) -> str | None:
+    """CNPJ do emitente: o primeiro formatado antes do bloco do destinatário."""
+    for part in (emitter, text):
+        m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", part)
+        if m:
+            return m.group(0)
+    m = re.search(r"CNPJ[^\d\n]{0,15}(\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2})", text, flags=re.IGNORECASE)
+    return m.group(1) if m else None
+
+
 def parse_invoice_text(text: str) -> dict:
     text = text or ""
-    cnpj = re.search(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}", text)
+    dest = re.search(r"DESTINAT[AÁ]RIO", text, flags=re.IGNORECASE)
+    emitter = text[:dest.start()] if dest and dest.start() > 0 else text  # cabeçalho da DANFE = dados do emitente
+    danfe_number = re.search(r"(?<![\d.,])(\d{3}\.\d{3}\.\d{3})(?![\d,-])", text)  # nº da DANFE: 000.310.631
     # "Nº 000.004.521" (DANFE), "NF-e N. 4521", "Número: 123"
     number = re.search(r"(?:N[ºO°]\.?|N[UÚ]MERO|NF-?e?\s*N?[ºO°.]*)\s*[:\-]?\s*(\d{1,3}(?:\.\d{3})+|\d{3,9})", text,
                        flags=re.IGNORECASE)
@@ -130,9 +168,10 @@ def parse_invoice_text(text: str) -> dict:
     inss = _find_money_after([r"RETEN[CÇ][AÃ]O\s+(?:DE\s+)?INSS", r"VALOR\s+DO\s+INSS", r"\bINSS\b"], text)
     issued = _parse_date(text)
     return {
-        "fornecedor": _parse_supplier(text),
-        "cnpj": cnpj.group(0) if cnpj else None,
-        "numero": number.group(1).replace(".", "") if number else None,
+        "fornecedor": _parse_supplier(text, emitter),
+        "cnpj": _parse_cnpj(text, emitter),
+        "numero": str(int(danfe_number.group(1).replace(".", ""))) if danfe_number
+        else (number.group(1).replace(".", "") if number else None),
         "valor": total,
         "emissao": issued,
         "iss": iss,
@@ -160,6 +199,19 @@ def pdf_page_images(pdf_bytes: bytes, max_pages: int = 3, scale: float = 2.5) ->
     finally:
         doc.close()
     return pages
+
+
+def pdf_layout_text(pdf_bytes: bytes) -> str:
+    """Texto do PDF preservando a disposição das colunas (linhas da tabela de itens inteiras)."""
+    import io
+
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        return "\n".join((page.extract_text(extraction_mode="layout") or "") for page in reader.pages[:5])
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> tuple[str, str]:
@@ -194,7 +246,13 @@ def read_invoice(image_bytes: bytes | None = None, text: str | None = None) -> d
     from erp.services.nf_import import parse_items_text
 
     fields = parse_invoice_text(text or "")
+    items = parse_items_text(text or "")
+    if is_pdf(image_bytes) and engine == "texto do PDF":
+        # tabela de itens: a leitura "em colunas" do PDF às vezes separa cada célula; usa a que achar mais itens
+        layout = parse_items_text(pdf_layout_text(image_bytes))
+        if len(layout) > len(items):
+            items = layout
     found = sum(1 for k in ("fornecedor", "valor", "emissao") if fields.get(k))
     return {"text": text or "", "engine": engine, "fields": fields, "confidence": found / 3,
-            "items": [i.as_dict() for i in parse_items_text(text or "")],
+            "items": [i.as_dict() for i in items],
             "read_at": datetime.now().isoformat(timespec="seconds")}

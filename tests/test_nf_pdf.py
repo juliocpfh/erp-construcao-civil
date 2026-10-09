@@ -87,3 +87,74 @@ def test_users_with_fiscal_keep_nf_access(tmp_path, monkeypatch):
     conn.close()
     assert mods == {"fiscal", "nfs"}
     assert "nfs" in auth.MODULES
+
+
+# DANFE real em texto (estrutura de um PDF emitido por ERP de loja; dados fictícios)
+DANFE_TEXT = """RECEBI(EMOS) DE LOJA EXEMPLO ESPORTES LTDA, OS PRODUTOS CONSTANTE DA NOTA FISCAL ELETRÔNICA INDICADA AO LADO,
+NF-e
+No.
+SÉRIE
+000.310.631
+LOJA EXEMPLO ESPORTES LTDA
+PROTOCOLO DE AUTORIZAÇÃO DE USO
+141260215229757 - 03-06-2026 16:24:25
+INSCRIÇÃO ESTADUAL DO SUBST. TRIB. C.N.P.J.
+02.314.041/0016-64
+ DESTINATÁRIO/ REMETENTE
+NOME/RAZÃO SOCIAL
+CONSTRUTORA CLIENTE LTDA
+C.N.P.J./C.P.F.
+62.955.505/0066-02
+DATA DA EMISSÃO
+03-06-2026 16:24:07
+VALOR TOTAL DOS PRODUTOS
+279,98
+VALOR TOTAL DA NOTA
+279,98
+DADOS DOS PRODUTOS/SERVIÇOS
+CÓDIGO DESCRIÇÃO NCM/SH CST CFOP  UN. QUANT. V.UNIT. DESCONTO V.TOTAL BC.ICMS V.ICMS V.IPI %ICMS %IPI
+5766741 BOLA DE FUTEBOL DE CAMPO PENALTY 95066200000 5929 UN 1,0000 99,9900 0,00 99,99 99,99 19,50 0,00 19,50 0,00
+BRAVO XXV
+6048443 BOLA VOLEI VP 5100 XXVI SANS 95066200000 5929 UN 2,0000 90,0000 0,01 179,99 179,99 35,10 0,00 19,50 0,00
+TAILLE
+DADOS ADICIONAIS
+INFORMAÇÕES COMPLEMENTARES RESERVADO AO FISCO
+"""
+
+
+def test_danfe_text_with_tax_columns_and_wrapped_descriptions():
+    res = ocr.read_invoice(None, DANFE_TEXT)
+    f = res["fields"]
+    assert f["fornecedor"] == "LOJA EXEMPLO ESPORTES LTDA"  # emitente, não o destinatário
+    assert f["cnpj"] == "02.314.041/0016-64" and f["numero"] == "310631" and f["valor"] == 279.98
+    assert [(i["description"], i["quantity"], i["unit"], i["unit_price"], i["total"], i["supplier_code"])
+            for i in res["items"]] == [
+        ("BOLA DE FUTEBOL DE CAMPO PENALTY BRAVO XXV", 1.0, "un", 99.99, 99.99, "5766741"),
+        ("BOLA VOLEI VP 5100 XXVI SANS TAILLE", 2.0, "un", 90.0, 179.99, "6048443")]  # com desconto
+
+
+def test_danfe_ocr_noise_is_ignored():
+    text = ("DADOS DOS PRODUTOS/SERVIÇOS\n[ocónrco | DESEN [SME Jeso o [IT OESCOMO | VODI [ EEIOS\n"
+            "5766741 BOLA DE FUTEBOL 95066200000 [5929] UN 1,0000 | 99,9900 0,00 99,99 99,99 | 19,50 0,00 [19,50 | 0,00\n"
+            "DA | =): 4:40 0 64 A PD PAD, PI A PR PA PP A DP\nDADOS ADICIONAIS\n")
+    from erp.services import nf_import
+
+    items = nf_import.parse_items_text(text)
+    assert [(i.description, i.quantity, i.unit_price, i.total) for i in items] == [("BOLA DE FUTEBOL", 1.0, 99.99, 99.99)]
+
+
+def test_danfe_values_below_labels_in_columns():
+    text = ("BASE DE CÁLCULO DO ICMS VALOR DO ICMS B.C. DO ICMS ST |VALOR TOTAL DOS PRODUTOS\n279,98 54,60 0,00 279,98\n"
+            "[VALOR DO FRETE [VALOR DO SEGURO [DESCONTO OUTRAS DESPESAS |VALOR DO IPI (VALOR TOTAL DA NOTA\n"
+            "0,00 0,00 0,00 0,00 0,00 279,98\n")
+    assert ocr.parse_invoice_text(text)["valor"] == 279.98
+
+
+def test_column_layout_pdf_reads_all_items():
+    from tests.danfe_fixture import EXPECTED, danfe_pdf
+
+    res = ocr.read_invoice(danfe_pdf())
+    assert res["fields"]["fornecedor"] == "DEPOSITO CURITIBANO DE MATERIAIS LTDA"
+    assert res["fields"]["numero"] == "4521" and res["fields"]["valor"] == 35559.5
+    assert [(i["description"], i["quantity"], i["unit"], i["unit_price"], i["total"], i["supplier_code"])
+            for i in res["items"]] == EXPECTED

@@ -100,40 +100,119 @@ def parse_nfe_xml(data: bytes) -> dict:
 
 
 # --------------------------------------------------------------------------- texto / OCR
-def parse_items_text(text: str) -> list[NFItem]:
-    """Heurística para itens no texto da DANFE (OCR ou colado).
+_SECTION_START = re.compile(r"DADOS\s+DOS?\s+PRODUTOS|PRODUTOS\s*/\s*SERVI", re.I)
+_SECTION_END = re.compile(r"DADOS\s+ADICIONAIS|C[AÁ]LCULO\s+DO\s+ISSQN|INFORMA[CÇ][OÕ]ES\s+COMPLEMENTARES|RESERVADO\s+AO\s+FISCO",
+                          re.I)
+_HEADER = re.compile(r"DESCRI[CÇ]|C[OÓ]DIGO\s+(?:DO\s+)?PROD|NCM\s*/?\s*SH|V\.?\s*UNIT|VALOR\s+UNIT|QUANT\.", re.I)
+_SKIP = re.compile(r"TOTAL|VALOR|BASE DE C|ICMS|FRETE|DESCONTO|CNPJ|EMISS|DESCRI|SUBTOTAL|TRIBUT|IMPOSTO", re.I)
+_CODE = re.compile(r"^(?=[A-Za-z0-9./-]*\d)[A-Za-z0-9./-]{3,20}$")
 
-    Aceita 'descrição qtd unidade valor_unit [total]' e 'descrição unidade qtd valor_unit [total]'
-    (ordem usual da DANFE), ignorando código, NCM, CST e CFOP no início/meio da linha.
-    """
-    units = "|".join(sorted((re.escape(u) for u in UNITS), key=len, reverse=True))
-    pat_qty_first = re.compile(rf"^(?P<desc>.+?)\s+(?P<qty>{_NUM})\s*(?P<unit>{units})\.?\s+(?:R\$\s*)?(?P<price>{_NUM})"
-                               rf"(?:\s+(?:R\$\s*)?(?P<total>{_NUM}))?\s*$", re.IGNORECASE)
-    pat_unit_first = re.compile(rf"^(?P<desc>.+?)\s+(?P<unit>{units})\.?\s+(?P<qty>{_NUM})\s+(?:R\$\s*)?(?P<price>{_NUM})"
-                                rf"(?:\s+(?:R\$\s*)?(?P<total>{_NUM}))?\s*$", re.IGNORECASE)
-    skip = re.compile(r"TOTAL|VALOR|BASE DE C|ICMS|FRETE|DESCONTO|CNPJ|EMISS|DESCRI|SUBTOTAL|TRIBUT|IMPOSTO", re.I)
-    items = []
-    for raw in (text or "").splitlines():
-        line = re.sub(r"\s+", " ", raw).strip(" |;")
-        if len(line) < 6 or skip.search(line):
+
+def _close(a: float, b: float) -> bool:
+    return abs(a - b) <= max(0.02, 0.01 * abs(b))
+
+
+def _clean_desc(desc: str) -> tuple[str, str]:
+    """Separa o código do produto (início) e remove NCM/CST/CFOP (números no fim da descrição)."""
+    tokens = desc.split()
+    code = ""
+    if len(tokens) > 1 and _CODE.match(tokens[0]) and re.search(r"[A-Za-zÀ-ú]{2}", " ".join(tokens[1:])):
+        code, tokens = tokens[0], tokens[1:]
+    while len(tokens) > 1 and re.fullmatch(r"\d{3,11}", tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens).strip(" -|"), code
+
+
+def _item_from_table_row(line: str, units: str) -> NFItem | None:
+    """Linha da tabela da DANFE: ... UN QTD V.UNIT [DESCONTO] V.TOTAL [BC ICMS, V.ICMS, V.IPI, alíquotas...]"""
+    for m in re.finditer(rf"\s({units})\.?\s+((?:(?:{_NUM})\s+){{1,}}(?:{_NUM}))(?=\s|$)", line, re.I):
+        nums = re.findall(_NUM, m.group(2))
+        if len(nums) < 2:
             continue
-        m = pat_qty_first.match(line) or pat_unit_first.match(line)
+        try:
+            vals = [_num(n) for n in nums]
+        except ValueError:
+            continue
+        qty, price = vals[0], vals[1]
+        if qty <= 0 or price <= 0:
+            continue
+        gross = qty * price
+        total = None
+        for k in range(2, len(vals)):
+            if _close(vals[k], gross) or (k >= 3 and _close(vals[k], gross - vals[k - 1])):
+                total = vals[k]
+                break
+        if total is None:
+            if len(vals) > 2:
+                continue  # números não fecham qtd x unitário: não é linha de item
+            total = round(gross, 2)
+        desc, code = _clean_desc(line[:m.start()].strip())
+        if re.search(r"[A-Za-zÀ-ú]{3}", desc):
+            return NFItem(desc, qty, norm_unit(m.group(1)), price, total, code)
+    return None
+
+
+def _item_from_simple_line(line: str, units: str) -> NFItem | None:
+    """Texto simples/colado: 'descrição qtd unidade valor_unit [total]' ou 'descrição unidade qtd valor_unit [total]'."""
+    pats = (rf"^(?P<desc>.+?)\s+(?P<qty>{_NUM})\s*(?P<unit>{units})\.?\s+(?:R\$\s*)?(?P<price>{_NUM})"
+            rf"(?:\s+(?:R\$\s*)?(?P<total>{_NUM}))?\s*$",
+            rf"^(?P<desc>.+?)\s+(?P<unit>{units})\.?\s+(?P<qty>{_NUM})\s+(?:R\$\s*)?(?P<price>{_NUM})"
+            rf"(?:\s+(?:R\$\s*)?(?P<total>{_NUM}))?\s*$")
+    for pat in pats:
+        m = re.match(pat, line, re.I)
         if not m:
             continue
-        desc = m.group("desc")
-        code = ""
-        lead = re.match(r"^(\d{3,14})\s+(.*)$", desc)
-        if lead and re.search(r"[A-Za-zÀ-ú]", lead.group(2)):
-            code, desc = lead.group(1), lead.group(2)
-        desc = re.sub(r"\s+\d{8}(\s+\d{3,4}){0,2}\s*$", "", desc).strip(" -")  # NCM / CST / CFOP
         try:
             qty, price = _num(m.group("qty")), _num(m.group("price"))
             total = _num(m.group("total")) if m.group("total") else round(qty * price, 2)
         except ValueError:
             continue
-        if qty <= 0 or price <= 0 or not re.search(r"[A-Za-zÀ-ú]{3}", desc):
+        desc, code = _clean_desc(m.group("desc"))
+        if qty > 0 and price > 0 and re.search(r"[A-Za-zÀ-ú]{3}", desc):
+            return NFItem(desc, qty, norm_unit(m.group("unit")), price, total, code)
+    return None
+
+
+def _looks_like_text(line: str) -> bool:
+    """Continuação da descrição (e não ruído de OCR das linhas da tabela): maioria de palavras de verdade."""
+    tokens = line.split()
+    words = [t for t in tokens if re.fullmatch(r"[A-Za-zÀ-ú]{3,}[.,]?", t)]
+    return len(line) <= 80 and bool(words) and len(words) * 2 >= len(tokens) and not re.search(r"\d+,\d{2}\s*$", line)
+
+
+def parse_items_text(text: str) -> list[NFItem]:
+    """Itens no texto da DANFE (PDF, OCR ou colado).
+
+    Na tabela "Dados dos produtos" lê UN, QUANT., V.UNIT. e V.TOTAL (conferindo qtd x unitário) mesmo com
+    as colunas de desconto, ICMS e IPI depois; junta à descrição as linhas em que ela continua.
+    Fora de uma tabela, aceita linhas simples 'descrição qtd un valor_unit [total]'.
+    """
+    units = "|".join(sorted((re.escape(u) for u in UNITS), key=len, reverse=True))
+    # OCR lê as bordas da tabela como | [ ]
+    lines = [re.sub(r"\s+", " ", re.sub(r"[|\[\]]", " ", raw)).strip(" ;") for raw in (text or "").splitlines()]
+    starts = [i for i, ln in enumerate(lines) if _SECTION_START.search(ln)]
+    in_table = bool(starts)
+    items: list[NFItem] = []
+    last: NFItem | None = None
+    for ln in lines[starts[0] + 1:] if starts else lines:
+        if in_table and _SECTION_END.search(ln):
+            break
+        if len(ln) < 3:
+            last = None if not in_table else last
             continue
-        items.append(NFItem(desc, qty, norm_unit(m.group("unit")), price, total, code))
+        if in_table and (_HEADER.search(ln) or _SECTION_START.search(ln)):
+            last = None
+            continue
+        if not in_table and _SKIP.search(ln):
+            continue
+        item = _item_from_table_row(ln, units) or _item_from_simple_line(ln, units)
+        if item:
+            items.append(item)
+            last = item
+        elif in_table and last and _looks_like_text(ln):
+            last.description = f"{last.description} {ln}".strip()  # descrição que continua na linha de baixo
+        else:
+            last = None
     return items
 
 
