@@ -10,7 +10,7 @@ from erp import auth
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 PAGES = ["page_dashboard", "page_wbs", "page_schedule", "page_rdo", "page_fiscal", "page_inventory", "page_media",
-         "page_environment", "page_ged", "page_contacts", "page_admin", "page_connections"]
+         "page_environment", "page_ged", "page_contacts", "page_admin", "page_connections", "page_project"]
 
 
 def _page(module: str, username: str) -> AppTest:
@@ -61,7 +61,7 @@ def test_viewer_pages_are_read_only(seeded, module):
     assert not at.exception, at.exception
 
 
-@pytest.mark.parametrize("module", ["page_admin", "page_connections"])
+@pytest.mark.parametrize("module", ["page_admin", "page_connections", "page_project"])
 def test_admin_pages_blocked_for_non_admin(seeded, module):
     at = _page(module, "almoxarife")
     assert any("restrito" in e.value for e in at.error)

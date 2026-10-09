@@ -7,16 +7,57 @@ completa de um **edifício residencial de 10 pavimentos** em Curitiba/PR
 
 Stack: Streamlit · Plotly · OpenCV · ReportLab · Graphviz · SQLite · Tesseract (OCR) · boto3 (S3) · ftplib (FTP) · Fernet (criptografia).
 
-## Acesso de teste
+## Primeiro acesso
 
-| Perfil | Usuário | Senha | O que vê |
-|---|---|---|---|
-| Administrador | `admin` | `admin123` | Tudo + Gestão de Usuários + Configurações de Conexão e Backup |
-| Almoxarife | `almoxarife` | `campo123` | Somente Almoxarifado (estoque e consumo diário) |
-| Visualizador | `visualizador` | `visual123` | Módulos de gestão em modo leitura |
-| Visualizador c/ senha provisória | `fiscal.banco` | `Prov@2026` | Obrigado a trocar a senha no 1º login |
-| Planejamento (Visualizador) | `eng.planejamento` | `plan2026` | Leitura |
-| Almoxarife inativo | `almox.noturno` | `campo456` | Bloqueado (usuário desativado) |
+Na primeira execução o sistema abre **em branco**, pronto para cadastrar uma obra real, com um
+único usuário: `admin`. A senha inicial é a definida em `ERP_ADMIN_PASSWORD` (Secrets/variável de
+ambiente) ou, se não houver, a senha padrão `admin123`, que o sistema obriga a trocar no primeiro login.
+A tela de login não exibe nenhuma senha.
+
+Ordem sugerida de cadastro (cada formulário grava no banco na hora): Usuários → WBS/EAP →
+Cronograma (tarefas, predecessoras, materiais, **Congelar baseline**) → Almoxarifado (materiais e
+saldo inicial) → Agenda. No dia a dia: RDO, NFs, fotos e checklist ambiental.
+
+**Projeto e Backup do Banco** (menu Administração):
+- **Dados do projeto**: nome, local, início e custo indireto diário.
+- **Banco no FTP / Backup**: configuração e teste do FTP (login + gravação), envio e restauração de versões.
+- **Novo projeto**: apaga tudo (pede a palavra APAGAR) e recomeça; a versão anterior continua no histórico do FTP.
+- **Carregar demonstração**: recria a simulação do edifício de 10 pavimentos para treinamento.
+
+### Simulação de demonstração
+
+Carregada pelo botão acima ou com `ERP_DEMO=1` na primeira execução. Usuários da simulação:
+`admin/admin123`, `almoxarife/campo123`, `visualizador/visual123`, `fiscal.banco/Prov@2026`
+(troca obrigatória), `eng.planejamento/plan2026`, `almox.noturno/campo456` (inativo).
+
+## Banco de dados no FTP
+
+O SQLite trabalha no disco do servidor do app e é copiado para `<pasta base>/backup-banco/` no FTP:
+
+| Arquivo no FTP | Para quê |
+|---|---|
+| `erp_obra_latest.db` | última versão; restaurada automaticamente quando o app inicia vazio |
+| `latest.json` | manifesto: versão, data, obra, nº de tarefas/RDOs/NFs, SHA-256 |
+| `AAAA/MM/erp_obra_AAAAMMDD_HHMMSS.db` | histórico de versões (restauráveis pela tela) |
+
+- O envio é automático após alterações (no máximo a cada 2 min) e é **conferido**: o arquivo é baixado
+  de volta e comparado por SHA-256.
+- **Proteção:** se o app reiniciar e não alcançar o FTP (endereço mudou), ele avisa o admin e **não**
+  sobrescreve o backup bom com um banco vazio. Basta corrigir o endereço na tela, testar e restaurar.
+- **Streamlit Cloud:** o disco é apagado a cada reinício, então coloque `FTP_HOST`, `FTP_PORT`,
+  `FTP_USER`, `FTP_PASSWORD`, `FTP_BASE_DIR` e `ERP_ADMIN_PASSWORD` em **Settings → Secrets**
+  (a tela gera o bloco pronto). Se o IP do FTP muda com frequência, use um DNS dinâmico
+  (No-IP/DuckDNS) como endereço.
+
+## Rodando no seu computador (Windows)
+
+1. Instale o Python 3.12 (python.org), marcando **Add Python to PATH**.
+2. Baixe o repositório (**Code → Download ZIP**) e descompacte, por exemplo em `C:\ERP`.
+3. Dê dois cliques em **`iniciar.bat`**: na primeira vez ele instala as dependências; depois abre o
+   sistema e mostra o endereço para usar no celular (mesma rede Wi-Fi).
+
+O banco fica em `data\erp_obra.db`. Linux/macOS: `./iniciar.sh`. OCR opcional no Windows: instale o
+Tesseract (UB-Mannheim) com o idioma português.
 
 ## Módulos
 
@@ -64,6 +105,8 @@ erp/
   storage.py               # DualStorage: S3 + FTP em paralelo + cache local
   auth.py                  # usuários, perfis e permissões
   seed.py                  # massa de simulação (determinística, relativa à data de hoje)
+  services/project.py      # projeto em branco, novo projeto, demonstração
+  services/backup.py       # banco no FTP/S3: envio conferido, versões, restauração
   services/                # regras de negócio, sem Streamlit
     scheduling.py  evm.py  finance.py  ocr.py  inventory.py  rdo.py  wbs.py
     environment.py contacts.py timelapse.py reports.py analytics.py simulation_media.py
@@ -81,8 +124,7 @@ streamlit run app.py
 pytest -q
 ```
 
-Na primeira execução o banco `data/erp_obra.db` e as mídias simuladas são gerados (~10 s).
-Para recomeçar a simulação, apague a pasta `data/`.
+Na primeira execução é criado o banco `data/erp_obra.db` em branco (ou a simulação, com `ERP_DEMO=1`).
 
 ## Deploy no Streamlit Community Cloud
 
@@ -93,8 +135,7 @@ Para recomeçar a simulação, apague a pasta `data/`.
 
 Observações:
 - O disco do Community Cloud é efêmero: o SQLite e o `.env` são recriados quando o app reinicia.
-  As mídias sobrevivem no S3/FTP; para persistir os dados textuais aponte `ERP_DB_PATH` para um
-  volume persistente.
+  Com o FTP nos Secrets, o banco é restaurado do FTP automaticamente (veja "Banco de dados no FTP").
 - Sem Tesseract, o OCR degrada com elegância: basta colar o texto da NF e o mesmo parser preenche
   os campos.
 - As integrações com S3 e FTP foram testadas com mocks (sem credenciais reais).
@@ -107,3 +148,5 @@ Observações:
 | `ERP_DB_PATH` | caminho do SQLite |
 | `ERP_ENV_PATH` | caminho do `.env` criptografado |
 | `ERP_MASTER_KEY` | chave Fernet para criptografar o `.env` |
+| `ERP_ADMIN_PASSWORD` | senha inicial do `admin` num banco novo (evita a senha padrão) |
+| `ERP_DEMO` | `1` = carrega a simulação na primeira execução |

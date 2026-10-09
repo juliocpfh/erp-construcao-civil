@@ -99,3 +99,22 @@ def card(title: str, subtitle: str = "", badge: str = "", badge_cls: str = "") -
         f'<div class="s">{html.escape(subtitle)}</div></div>',
         unsafe_allow_html=True,
     )
+
+
+def has_schedule() -> bool:
+    from erp import db
+
+    return bool(db.query_one("SELECT COUNT(*) AS n FROM tasks")["n"])
+
+
+def empty_project_guide(context: str = "") -> None:
+    """Orientação exibida enquanto o projeto não tem cronograma cadastrado."""
+    st.info((context + "\n\n" if context else "") +
+            "**Projeto novo — siga esta ordem para cadastrar a obra (cada etapa é salva na hora):**\n\n"
+            "1. **Usuários** (Administração): crie os usuários da equipe e marque as permissões.\n"
+            "2. **WBS / EAP**: cadastre as etapas e entregas da obra.\n"
+            "3. **Cronograma**: cadastre as tarefas (duração, custo, predecessoras) e congele a **baseline**.\n"
+            "4. **Almoxarifado**: cadastre os materiais (unidade, lead time, estoque mínimo).\n"
+            "5. **Agenda**: importe ou cadastre os contatos (fornecedores, equipe, órgãos).\n"
+            "6. No dia a dia: **RDO**, **NFs**, fotos e checklist ambiental alimentam os indicadores.\n\n"
+            "Os indicadores (IDC, IDP, Curva S, Gantt) aparecem assim que houver tarefas no cronograma.")

@@ -41,10 +41,13 @@ def render() -> None:
     df = wbs_service.load_wbs()
     view = st.segmented_control("Visualização", VIEWS, default=VIEWS[0], key="wbs_view") or VIEWS[0]
 
-    if view == VIEWS[0]:
+    if df.empty:
+        st.info("Nenhuma entrega cadastrada ainda. Use **➕ Nova entrega** abaixo: comece pela obra (raiz) e "
+                "depois cadastre as etapas (Fundação, Estrutura, Alvenaria...) como filhas dela.")
+    elif view == VIEWS[0]:
         c1, c2 = st.columns([1, 1])
-        level = c1.slider("Níveis exibidos", 1, int(df["level"].max()) if not df.empty else 1,
-                          int(df["level"].max()) if not df.empty else 1)
+        max_level = int(df["level"].max())
+        level = c1.slider("Níveis exibidos", 0, max_level, max_level) if max_level > 0 else 0
         horizontal = c2.toggle("Orientação horizontal (árvore deitada)", value=True)
         st.graphviz_chart(wbs_service.graphviz_tree(df, level, horizontal), width="stretch")
         st.caption("Cores: cinza = A Fazer · amarelo = Em Andamento · verde = Concluído. % = avanço ponderado pelo custo.")
@@ -67,7 +70,7 @@ def render() -> None:
     with c1, st.form("wbs_new", clear_on_submit=True):
         st.markdown("##### ➕ Nova entrega")
         parents = {f"{r.code} · {r.name}": int(r.id) for r in df.itertuples()}
-        parent = st.selectbox("Entrega pai", list(parents) or ["(raiz)"])
+        parent = st.selectbox("Entrega pai", ["(raiz)"] + list(parents), index=1 if parents else 0)
         name = st.text_input("Nome da entrega")
         desc = st.text_area("Descrição / critério de aceite", height=80)
         contacts = {c["name"]: c["id"] for c in db.query("SELECT id, name FROM contacts ORDER BY name")}

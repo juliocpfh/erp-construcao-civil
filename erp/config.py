@@ -53,6 +53,7 @@ MODULES: dict[str, tuple[str, str]] = {
 ADMIN_PAGES: dict[str, tuple[str, str]] = {
     "usuarios": ("Gestão de Usuários", ":material/admin_panel_settings:"),
     "conexoes": ("Configurações de Conexão e Backup", ":material/cloud_sync:"),
+    "projeto": ("Projeto e Backup do Banco", ":material/settings_backup_restore:"),
 }
 
 DEFAULT_PERMISSIONS: dict[str, list[str]] = {

@@ -87,6 +87,13 @@ class S3Backend:
         obj = self.client().get_object(Bucket=self.bucket, Key=self._full_key(key))
         return obj["Body"].read()
 
+    def list_files(self, prefix: str) -> list[str]:
+        keys: list[str] = []
+        strip = len(self._full_key("")) if self.prefix else 0
+        for page in self.client().get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=self._full_key(prefix)):
+            keys += [o["Key"][strip:] for o in page.get("Contents", [])]
+        return sorted(keys)
+
     def test(self) -> tuple[bool, str]:
         if not self.configured:
             return False, "Credenciais AWS/bucket não informados."
@@ -152,6 +159,70 @@ class FTPBackend:
             except Exception:  # noqa: BLE001
                 ftp.close()
         return buf.getvalue()
+
+    def delete(self, key: str) -> None:
+        ftp = self.connect()
+        try:
+            ftp.delete(posixpath.join(self.base_dir, key))
+        finally:
+            try:
+                ftp.quit()
+            except Exception:  # noqa: BLE001
+                ftp.close()
+
+    def list_files(self, prefix: str) -> list[str]:
+        """Chaves (relativas ao diretório base) de todos os arquivos sob ``prefix``, recursivo."""
+        found: list[str] = []
+        ftp = self.connect()
+
+        def walk(rel: str) -> None:
+            path = posixpath.join(self.base_dir, rel)
+            try:
+                entries = list(ftp.mlsd(path, facts=["type"]))
+                for name, facts in entries:
+                    if name in (".", ".."):
+                        continue
+                    child = posixpath.join(rel, name)
+                    if facts.get("type") == "dir":
+                        walk(child)
+                    elif facts.get("type", "file") == "file":
+                        found.append(child)
+            except ftplib.error_perm:
+                try:
+                    names = ftp.nlst(path)
+                except ftplib.error_perm:
+                    return
+                for full in names:
+                    name = posixpath.basename(full.rstrip("/"))
+                    child = posixpath.join(rel, name)
+                    if "." in name:
+                        found.append(child)
+                    else:
+                        walk(child)
+
+        try:
+            walk(prefix)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:  # noqa: BLE001
+                ftp.close()
+        return sorted(found)
+
+    def test_write(self) -> tuple[bool, str]:
+        """Login + gravação + leitura + exclusão de um arquivo de teste (confirma permissão de escrita)."""
+        ok, msg = self.test()
+        if not ok:
+            return ok, msg
+        key, payload = "backup-banco/.teste_conexao", datetime.now().isoformat().encode()
+        try:
+            self.upload(key, payload)
+            if self.download(key) != payload:
+                return False, msg + " | Conteúdo lido difere do gravado."
+            self.delete(key)
+        except Exception as exc:  # noqa: BLE001
+            return False, msg + f" | Sem permissão de gravação em {self.base_dir}/backup-banco: {exc}"
+        return True, msg + f" | Gravação e leitura confirmadas em {self.base_dir}/backup-banco."
 
     def test(self) -> tuple[bool, str]:
         if not self.configured:

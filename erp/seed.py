@@ -243,7 +243,9 @@ def seed_database(today: date | None = None, with_media: bool = True, rng_seed: 
     start -= timedelta(days=start.weekday())  # segunda-feira
 
     for key, val in {
-        "project_start": start.isoformat(), "daily_indirect_cost": "4800", "project_area_m2": "6240",
+        "project_start": start.isoformat(), "daily_indirect_cost": "4800",
+        "project_name": "Residencial Bosque das Araucárias", "project_location": "Curitiba/PR",
+        "project_description": "Edifício residencial de 10 pavimentos (simulação de demonstração)", "project_area_m2": "6240",
         "project_units": "40", "araucaria_dap_factor": "12", "simulation_today": today.isoformat(),
     }.items():
         db.set_setting(key, val)

@@ -7,8 +7,8 @@ from datetime import date
 import streamlit as st
 
 from erp import db
-from erp.config import PROJECT_NAME
 from erp.services.analytics import collect_report_data
+from erp.services.project import project_info
 from erp.services.reports import build_flash_report
 from erp.services.timelapse import Frame, build_timelapse
 from erp.storage import load_media, store_media
@@ -103,7 +103,7 @@ def _make_video(wbs_id: int | None, title: str, fps: int, hold: float) -> None:
         return
     with st.spinner(f"Renderizando {len(frames)} fotos com OpenCV..."):
         t0 = time.perf_counter()
-        data = build_timelapse(frames, f"{PROJECT_NAME} - {title}", fps=fps, seconds_per_photo=hold)
+        data = build_timelapse(frames, f"{project_info()['name']} - {title}", fps=fps, seconds_per_photo=hold)
     slug = "geral" if wbs_id is None else f"etapa_{wbs_id}"
     st.session_state["timelapse"] = {"data": data, "title": title, "frames": len(frames),
                                      "secs": time.perf_counter() - t0, "file": f"timelapse_{slug}.mp4"}

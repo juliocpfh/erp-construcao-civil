@@ -33,6 +33,9 @@ def render() -> None:
                     st.success(f"{r['created']} criado(s), {r['updated']} atualizado(s), "
                                f"{r['linked_invoices']} NF(s) vinculada(s) ao emitente.")
 
+        with st.expander("➕ Cadastrar / editar contato manualmente", expanded=False):
+            _contact_form()
+
     df = db.query_df("SELECT id, name, phone, email, organization, title, category, source FROM contacts ORDER BY name")
     c1, c2 = st.columns([2, 1])
     q = c1.text_input("🔎 Buscar contato")
@@ -72,3 +75,39 @@ def render() -> None:
     st.markdown(f'<div class="erp-timeline">{items}</div>', unsafe_allow_html=True)
     if len(events) > len(shown):
         st.caption(f"Exibindo os {len(shown)} eventos mais recentes de {len(events)}.")
+
+
+CATEGORIES = ["Fornecedor", "Equipe", "Projetista", "Órgão público", "Cliente", "Outro"]
+
+
+def _contact_form() -> None:
+    rows = db.query("SELECT * FROM contacts ORDER BY name")
+    by_label = {f"{r['name']} — {r['organization'] or ''}": r for r in rows}
+    sel = st.selectbox("Contato", ["➕ Novo contato"] + list(by_label), key="contact_pick")
+    c = by_label.get(sel, {})
+    cats = CATEGORIES + ([c["category"]] if c.get("category") and c["category"] not in CATEGORIES else [])
+    with st.form(f"contact_{c.get('id', 'novo')}", clear_on_submit=not c):
+        a, b = st.columns(2)
+        name = a.text_input("Nome *", c.get("name", ""))
+        org = b.text_input("Empresa", c.get("organization") or "")
+        a, b = st.columns(2)
+        phone = a.text_input("Telefone", c.get("phone") or "")
+        email = b.text_input("E-mail", c.get("email") or "")
+        a, b = st.columns(2)
+        title = a.text_input("Cargo / função", c.get("title") or "")
+        cat = b.selectbox("Categoria", cats, index=cats.index(c["category"]) if c.get("category") in cats else 0)
+        notes = st.text_area("Observações", c.get("notes") or "", height=70)
+        if st.form_submit_button("Salvar contato", type="primary"):
+            if not name.strip():
+                st.error("Informe o nome.")
+                return
+            vals = (name.strip(), phone.strip(), email.strip(), org.strip(), title.strip(),
+                    cat, notes.strip())
+            if c:
+                db.execute("UPDATE contacts SET name = ?, phone = ?, email = ?, organization = ?, title = ?, category = ?, "
+                           "notes = ? WHERE id = ?", (*vals, c["id"]))
+            else:
+                db.execute("INSERT INTO contacts(name, phone, email, organization, title, category, notes, source, created_at) "
+                           "VALUES (?,?,?,?,?,?,?,'manual',?)", (*vals, db.now_iso()))
+            st.success("Contato salvo.")
+            st.rerun()

@@ -1,0 +1,85 @@
+"""Backup do banco num servidor FTP real (pyftpdlib local): teste de acesso, envio conferido, versões e restauração."""
+from __future__ import annotations
+
+import threading
+import time
+from datetime import date
+
+import pytest
+
+pytest.importorskip("pyftpdlib")
+from pyftpdlib.authorizers import DummyAuthorizer  # noqa: E402
+from pyftpdlib.handlers import FTPHandler  # noqa: E402
+from pyftpdlib.servers import FTPServer  # noqa: E402
+
+from erp import db  # noqa: E402
+from erp.services import backup, project  # noqa: E402
+from erp.storage import DualStorage, FTPBackend  # noqa: E402
+
+
+@pytest.fixture
+def ftp_server(tmp_path):
+    root = tmp_path / "ftp_root"
+    root.mkdir()
+    auth = DummyAuthorizer()
+    auth.add_user("obra", "s3nh@ftp", str(root), perm="elradfmwMT")
+    auth.add_user("leitor", "leitor123", str(root), perm="elr")
+    handler = type("H", (FTPHandler,), {"authorizer": auth, "passive_ports": range(60000, 60100)})
+    server = FTPServer(("127.0.0.1", 0), handler)
+    t = threading.Thread(target=server.serve_forever, kwargs={"timeout": 0.2}, daemon=True)
+    t.start()
+    yield {"FTP_HOST": "127.0.0.1", "FTP_PORT": str(server.address[1]), "FTP_USER": "obra",
+           "FTP_PASSWORD": "s3nh@ftp", "FTP_BASE_DIR": "/backup_obra", "FTP_TLS": "0"}, root
+    server.close_all()
+
+
+@pytest.fixture(autouse=True)
+def reset_backup_state():
+    backup._state.update(last_check=0.0, last_hash=None, last_ok=None, last_error=None, armed=False, startup=None)
+
+
+def test_ftp_access_check(empty_db, ftp_server):
+    settings, _ = ftp_server
+    ok, msg = FTPBackend(settings).test_write()
+    assert ok, msg
+    assert "Gravação e leitura confirmadas" in msg
+    ok, msg = FTPBackend({**settings, "FTP_USER": "leitor", "FTP_PASSWORD": "leitor123"}).test_write()
+    assert not ok and "permissão de gravação" in msg
+    ok, msg = FTPBackend({**settings, "FTP_PASSWORD": "errada"}).test_write()
+    assert not ok
+    ok, _ = FTPBackend({**settings, "FTP_PORT": "1"}).test_write()  # endereço antigo/inacessível
+    assert not ok
+
+
+def test_database_lives_on_ftp(empty_db, ftp_server):
+    settings, root = ftp_server
+    storage = DualStorage(settings=settings)
+    project.create_blank_project("Obra FTP", "Curitiba/PR", date(2026, 10, 1), admin_password="Senha1234")
+    res = backup.push_remote(storage=storage)
+    assert res["ok"], res
+    assert (root / "backup_obra" / "backup-banco" / "erp_obra_latest.db").exists()
+    assert (root / "backup_obra" / "backup-banco" / "latest.json").exists()
+
+    time.sleep(1.1)
+    db.set_setting("project_location", "Araucária/PR")
+    assert backup.push_remote(storage=storage)["ok"]
+    assert len(backup.list_versions(storage)) == 2
+
+    project.wipe_all()
+    assert backup.restore_latest_remote(storage)
+    assert project.project_info()["location"] == "Araucária/PR"
+
+    old = backup.list_versions(storage)[-1]
+    backup.restore_from_remote(old, storage=storage)
+    assert project.project_info()["location"] == "Curitiba/PR"
+    assert backup.last_restore()["version"] == old.rsplit("/", 1)[-1]
+
+
+def test_unreachable_ftp_on_startup_is_reported(empty_db, ftp_server):
+    settings, _ = ftp_server
+    storage = DualStorage(settings={**settings, "FTP_PORT": "1"})
+    assert not backup.restore_latest_remote(storage)
+    st = backup.status()["startup"]
+    assert st["configured"] and not st["ok"] and not st["reachable"]
+    assert "inacessível" in st["message"]
+    assert not backup.status()["armed"]

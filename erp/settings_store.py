@@ -68,7 +68,9 @@ def load_connection_settings(path: Path | None = None) -> dict[str, str]:
             settings[key] = os.environ[key]
     for key, val in read_raw_env(path).items():
         if key in CONNECTION_FIELDS and val != "":
-            settings[key] = decrypt_value(val)
+            plain = decrypt_value(val)
+            if plain != "":  # chave mestra trocada: valor ilegível não apaga o que veio dos Secrets
+                settings[key] = plain
     return settings
 
 

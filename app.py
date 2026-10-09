@@ -6,11 +6,13 @@ import streamlit as st
 st.set_page_config(page_title="ERP Obras · PMO", page_icon="🏗️", layout="wide", initial_sidebar_state="expanded")
 
 from erp import auth, db  # noqa: E402
-from erp.config import ADMIN_PAGES, MODULES, PROJECT_NAME, ROLE_ADMIN  # noqa: E402
+from erp.config import ADMIN_PAGES, MODULES, ROLE_ADMIN  # noqa: E402
+from erp.services import backup  # noqa: E402
+from erp.services.project import project_info  # noqa: E402
 from erp.security import password_policy_errors  # noqa: E402
 from erp.ui import (  # noqa: E402
     page_admin, page_connections, page_contacts, page_dashboard, page_environment, page_fiscal, page_ged,
-    page_inventory, page_media, page_rdo, page_schedule, page_wbs,
+    page_inventory, page_media, page_project, page_rdo, page_schedule, page_wbs,
 )
 from erp.ui.common import inject_css  # noqa: E402
 
@@ -19,28 +21,30 @@ RENDERERS = {
     "rdo": page_rdo.render, "fiscal": page_fiscal.render, "estoque": page_inventory.render,
     "midia": page_media.render, "ambiental": page_environment.render, "ged": page_ged.render,
     "contatos": page_contacts.render, "usuarios": page_admin.render, "conexoes": page_connections.render,
+    "projeto": page_project.render,
 }
 SECTIONS = {
     "Gestão": ["painel", "eap", "cronograma", "fiscal"],
     "Campo": ["rdo", "estoque", "midia", "ambiental"],
     "Documentos": ["ged", "contatos"],
-    "Administração": ["usuarios", "conexoes"],
+    "Administração": ["projeto", "usuarios", "conexoes"],
 }
 
 
-@st.cache_resource(show_spinner="Preparando banco de dados e massa de simulação (primeira execução)...")
+@st.cache_resource(show_spinner="Preparando banco de dados (primeira execução)...")
 def bootstrap() -> bool:
-    from erp.seed import seed_database
+    from erp.services import project
 
     db.init_db()
     if not db.is_seeded():
-        seed_database()
+        backup.restore_latest_remote()  # disco efêmero: recupera o último backup do S3/FTP, se houver
+    project.bootstrap()
     return True
 
 
 def login_sidebar() -> None:
     with st.sidebar:
-        st.markdown(f"### 🏗️ ERP Obras\n{PROJECT_NAME}")
+        st.markdown(f"### 🏗️ ERP Obras\n{project_info()['name']}")
         with st.form("login"):
             username = st.text_input("Usuário")
             password = st.text_input("Senha", type="password")
@@ -55,17 +59,15 @@ def login_sidebar() -> None:
 def landing() -> None:
     inject_css()
     st.title("🏗️ ERP de Gestão de Obras · PMO de Engenharia Civil")
-    st.markdown(
-        f"**{PROJECT_NAME}** — edifício residencial de 10 pavimentos. Faça login na barra lateral "
-        "(no celular, toque em **›** no canto superior esquerdo).")
-    st.markdown("""
-| Perfil | Usuário | Senha | Acesso |
-|---|---|---|---|
-| Administrador | `admin` | `admin123` | Tudo + usuários + conexões/backup |
-| Almoxarife | `almoxarife` | `campo123` | Somente estoque e consumo diário |
-| Visualizador | `visualizador` | `visual123` | Leitura dos módulos de gestão |
-| Visualizador (senha provisória) | `fiscal.banco` | `Prov@2026` | Troca de senha obrigatória |
-""")
+    if msg := st.session_state.pop("restore_msg", None):
+        st.success(msg)
+    startup = backup.status()["startup"]
+    if startup and startup.get("configured") and not startup.get("ok") and not startup.get("reachable", False):
+        st.warning("O banco não pôde ser restaurado do servidor FTP. O administrador deve entrar e conferir o "
+                   "endereço do FTP em **Projeto e Backup do Banco**.")
+    info = project_info()
+    st.markdown(f"**{info['name']}**" + (f" · {info['location']}" if info["location"] else ""))
+    st.markdown("Faça login na barra lateral (no celular, toque em **›** no canto superior esquerdo).")
     c = st.columns(3)
     c[0].info("📊 CPM, Gantt, Curva S, IDC/IDP")
     c[1].info("📸 OCR de NF, almoxarifado e RDO")
@@ -115,6 +117,11 @@ def main() -> None:
         change_password_screen(user)
         return
 
+    startup = backup.status()["startup"]
+    if user["role"] == ROLE_ADMIN and startup and startup.get("configured") and not startup.get("ok") \
+            and not startup.get("reachable", False):
+        st.warning("⚠️ " + startup["message"] + " Abra **Projeto e Backup do Banco** para corrigir o FTP e restaurar.")
+
     allowed = auth.allowed_pages(user)
     catalog = {**MODULES, **ADMIN_PAGES}
     nav: dict[str, list] = {}
@@ -129,6 +136,7 @@ def main() -> None:
     inject_css()
     page = st.navigation(nav, expanded=user["role"] == ROLE_ADMIN)
     page.run()
+    backup.maybe_auto_backup()  # cópia do banco no S3/FTP, se configurados e se houve alteração
 
 
 main()

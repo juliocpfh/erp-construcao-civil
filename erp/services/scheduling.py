@@ -192,6 +192,8 @@ def project_summary(data_date: date | None = None, sched: pd.DataFrame | None = 
 
 
 def active_tasks_on(day: date, sched: pd.DataFrame) -> pd.DataFrame:
+    if sched.empty:
+        return sched
     mask = (sched["start"] <= day) & (sched["finish"] >= day) & (sched["progress"] < 100)
     return sched[mask]
 
@@ -234,6 +236,9 @@ def rdo_impacts(day: date, weather: str, problem_task_id: int | None = None, pro
 def preview_rdo_impact(day: date, weather: str, problem_task_id: int | None = None, problem_days: int = 0) -> dict:
     """Recalcula em tempo real (sem gravar) a data final projetada caso o RDO seja salvo."""
     current = compute_schedule(day)
+    if current.empty:
+        return {"impacts": [], "critical_impacts": [], "finish_before": None, "finish_after": None,
+                "shift_days": 0, "baseline_finish": None}
     impacts = rdo_impacts(day, weather, problem_task_id, problem_days, sched=current)
     extra: dict[int, int] = defaultdict(int)
     for i in impacts:
@@ -280,6 +285,11 @@ def freeze_baseline() -> None:
 def baseline_vs_actual(data_date: date | None = None, sched: pd.DataFrame | None = None) -> pd.DataFrame:
     """Onde se perdeu tempo e dinheiro: por tarefa, desvio de prazo e de custo."""
     sched = sched if sched is not None else compute_schedule(data_date)
+    cols = ["id", "code", "name", "wbs_name", "critical", "baseline_start", "baseline_finish", "start", "finish",
+            "finish_variance", "delay", "lost_days", "baseline_cost", "progress", "earned_value", "actual_cost",
+            "cost_variance", "delay_cost", "money_lost"]
+    if sched.empty:
+        return pd.DataFrame(columns=cols)
     costs = db.query_df(
         "SELECT task_id, SUM(total_value) AS actual_cost FROM invoices WHERE status = 'Aprovada' "
         "AND task_id IS NOT NULL GROUP BY task_id"

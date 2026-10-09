@@ -14,7 +14,6 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from erp.config import PROJECT_LOCATION, PROJECT_NAME
 from erp.services.finance import brl
 
 RED = colors.HexColor("#C0392B")
@@ -72,6 +71,10 @@ def _table(data: list[list], col_widths: list[float], header_bg=BLUE, zebra: boo
 
 def build_flash_report(data: dict) -> bytes:
     """``data``: evm, summary, curve(DataFrame), critical(DataFrame), stock_alerts, embargo_alerts, losses."""
+    from erp.services.project import project_info
+
+    info = project_info()
+    PROJECT_NAME, PROJECT_LOCATION = info["name"], info["location"] or "-"
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm,
                             topMargin=1.3 * cm, bottomMargin=1.3 * cm,

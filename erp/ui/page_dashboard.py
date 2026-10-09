@@ -5,15 +5,22 @@ from datetime import date
 
 import streamlit as st
 
-from erp.config import PROJECT_LOCATION, PROJECT_NAME
 from erp.services.analytics import collect_report_data
 from erp.services.evm import performance_label
+from erp.services.project import project_info
 from erp.ui import charts
-from erp.ui.common import blink_alert, fmt_num, header, money, money_short, username
+from erp.ui.common import (
+    blink_alert, empty_project_guide, fmt_num, has_schedule, header, money, money_short, username,
+)
 
 
 def render() -> None:
-    header(f"🏗️ {PROJECT_NAME}", f"{PROJECT_LOCATION} · Edifício residencial de 10 pavimentos · Data de status {date.today():%d/%m/%Y}")
+    info = project_info()
+    sub = " · ".join(x for x in (info["location"], info["description"], f"Data de status {date.today():%d/%m/%Y}") if x)
+    header(f"🏗️ {info['name']}", sub)
+    if not has_schedule():
+        empty_project_guide()
+        return
     data = collect_report_data(user=username())
     evm, summary = data["evm"], data["summary"]
 
