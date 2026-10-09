@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+# dados de execução (SQLite, mídias locais e chave mestra) — gerados no primeiro start
+data/
+# segredos (gravados criptografados pelo app)
+.env
+.streamlit/secrets.toml

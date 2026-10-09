@@ -1,0 +1,58 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Lopes;Fernando;;;
+FN:Fernando Lopes
+ORG:Madeireira Araucária Formas Ltda
+TITLE:Gerente de Vendas
+TEL;TYPE=CELL:+55 41 99811-2233
+EMAIL;TYPE=WORK:fernando@madeireiraaraucaria.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+N:Martins;Cristiane;;;
+FN:Cristiane Martins
+ORG:Revestir Porcelanatos Ltda
+TITLE:Consultora Técnica
+TEL;TYPE=CELL:(41) 99722-3344
+EMAIL:cristiane@revestirporcelanatos.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Gilmar Ostrowski
+ORG:Alvenaria Pinhais Empreiteira Ltda
+TITLE:Empreiteiro
+TEL;TYPE=CELL:41996334455
+EMAIL:gilmar@alvenariapinhais.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Débora Schmidt
+ORG:Fachadas Sul Revestimentos Ltda
+TITLE:Coordenadora de Obras
+TEL;TYPE=WORK:4133445566
+EMAIL:debora@fachadassul.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:2.1
+N;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Ara=C3=BAjo;Ot=C3=A1vio;;;
+FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Ot=C3=A1vio Ara=C3=BAjo
+ORG:Elevar Sul Elevadores Ltda
+TEL;CELL:41995556677
+EMAIL;INTERNET:otavio@elevarsul.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Ricardo Benghi
+ORG:Canteiro Serviços de Apoio ME
+TITLE:Sócio-administrador
+TEL;TYPE=cell;VALUE=uri:tel:+55-41-99667-7889
+EMAIL:ricardo@canteiroservicos.com.br
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Patrícia Hoffmann
+ORG:Hidroluz Instalações Prediais Ltda
+TITLE:Gestora de Contratos
+TEL;TYPE=CELL:41998877665
+EMAIL:adm@hidroluzinstalacoes.com.br
+END:VCARD
