@@ -20,6 +20,12 @@ CONNECTION_FIELDS: dict[str, tuple[str, bool]] = {
     "FTP_PASSWORD": ("Senha FTP", True),
     "FTP_BASE_DIR": ("Diretório base do backup", False),
     "FTP_TLS": ("Usar FTPS (TLS)", False),
+    "SMTP_HOST": ("Servidor SMTP (ex.: smtp.gmail.com)", False),
+    "SMTP_PORT": ("Porta SMTP", False),
+    "SMTP_USER": ("Usuário SMTP (e-mail)", True),
+    "SMTP_PASSWORD": ("Senha SMTP (senha de app)", True),
+    "SMTP_FROM": ("Remetente (ex.: ERP Obras <obra@empresa.com>)", False),
+    "SMTP_SECURITY": ("Segurança (starttls, ssl ou nenhuma)", False),
 }
 
 DEFAULTS = {
@@ -28,6 +34,8 @@ DEFAULTS = {
     "FTP_PORT": "21",
     "FTP_BASE_DIR": "/backup_obra",
     "FTP_TLS": "0",
+    "SMTP_PORT": "587",
+    "SMTP_SECURITY": "starttls",
 }
 
 

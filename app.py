@@ -7,13 +7,14 @@ st.set_page_config(page_title="ERP Obras · PMO", page_icon="🏗️", layout="w
 
 from erp import auth, db, storage_mode  # noqa: E402
 from erp.config import ADMIN_PAGES, MODULES, ROLE_ADMIN  # noqa: E402
-from erp.services import backup  # noqa: E402
+from erp.services import accounts, backup  # noqa: E402
 from erp.services.project import project_info  # noqa: E402
 from erp.security import password_policy_errors  # noqa: E402
 from erp.ui import (  # noqa: E402
     page_admin, page_connections, page_contacts, page_dashboard, page_environment, page_fiscal, page_ged,
     page_inventory, page_media, page_project, page_rdo, page_schedule, page_wbs,
 )
+from erp.ui import account_screens  # noqa: E402
 from erp.ui.common import ftp_problem_alert, inject_css  # noqa: E402
 
 RENDERERS = {
@@ -52,13 +53,25 @@ def login_sidebar() -> None:
                 user = auth.authenticate(username, password)
                 if user:
                     st.session_state["user"] = user
+                    st.session_state.pop(account_screens.VIEW_KEY, None)
                     st.rerun()
-                st.error("Usuário ou senha inválidos (ou usuário inativo).")
+                st.error("Usuário ou senha inválidos (ou usuário inativo / aguardando liberação).")
+        account_screens.auth_links("sb")
 
 
 def landing() -> None:
     inject_css()
     st.title("🏗️ ERP de Gestão de Obras · PMO de Engenharia Civil")
+    view = account_screens.current_view()
+    if view == "signup":
+        account_screens.signup_screen()
+        return
+    if view == "forgot":
+        account_screens.forgot_screen()
+        return
+    if view == "new_recovery":
+        account_screens.new_recovery_screen()
+        return
     if msg := st.session_state.pop("restore_msg", None):
         st.success(msg)
     problem = backup.connection_problem()
@@ -68,6 +81,7 @@ def landing() -> None:
     info = project_info()
     st.markdown(f"**{info['name']}**" + (f" · {info['location']}" if info["location"] else ""))
     st.markdown("Faça login na barra lateral (no celular, toque em **›** no canto superior esquerdo).")
+    account_screens.auth_links("main")
     c = st.columns(3)
     c[0].info("📊 CPM, Gantt, Curva S, IDC/IDP")
     c[1].info("📸 OCR de NF, almoxarifado e RDO")
@@ -102,6 +116,10 @@ def main() -> None:
         st.session_state.pop("user", None)
         user = None
     if not user:
+        if accounts.setup_pending() or st.session_state.get("recovery_code") and \
+                account_screens.current_view() != "new_recovery":
+            account_screens.first_setup_screen()  # instalação nova: criar o administrador
+            return
         login_sidebar()
         landing()
         return
@@ -109,6 +127,7 @@ def main() -> None:
 
     with st.sidebar:
         st.markdown(f"**👤 {user['full_name']}**  \n{user['role']} · `{user['username']}`")
+        account_screens.my_account(user)
         if st.button("Sair", icon=":material/logout:", width="stretch"):
             st.session_state.clear()
             st.rerun()
@@ -125,6 +144,8 @@ def main() -> None:
         return
 
     allowed = auth.allowed_pages(user)
+    if user["role"] == ROLE_ADMIN and (n := accounts.pending_count()):
+        st.sidebar.warning(f"📥 {n} pedido(s) de acesso/senha aguardando você em **Gestão de Usuários**.")
     catalog = {**MODULES, **ADMIN_PAGES}
     nav: dict[str, list] = {}
     by_key = {}

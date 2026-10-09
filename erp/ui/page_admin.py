@@ -7,7 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from erp import auth
-from erp.config import DOC_AREAS, MODULES, ROLE_ADMIN, ROLES
+from erp.services import accounts
+from erp.config import DEFAULT_PERMISSIONS, DOC_AREAS, MODULES, ROLE_ADMIN, ROLE_VIEWER, ROLES
 from erp.ui.common import current_user, header
 
 
@@ -17,6 +18,7 @@ def render() -> None:
         st.stop()
     header("Gestão de Usuários e Acessos (RBAC)",
            "Marque os módulos liberados para cada usuário. Administradores têm acesso total.")
+    _requests()
     users = auth.list_users()
 
     st.subheader("🔐 Matriz de permissões")
@@ -53,12 +55,15 @@ def render() -> None:
         st.subheader("➕ Novo usuário")
         username = st.text_input("Login")
         full = st.text_input("Nome completo")
+        email = st.text_input("E-mail (recuperação de senha)")
         role = st.selectbox("Perfil", ROLES, index=2)
         temp = st.text_input("Senha provisória", value=f"Obra@{secrets.randbelow(9000) + 1000}")
         st.caption("O usuário será obrigado a trocar a senha no primeiro acesso.")
         if st.form_submit_button("Criar usuário", type="primary"):
             try:
-                auth.create_user(username, temp, role, full, must_change_password=True)
+                uid = auth.create_user(username, temp, role, full, must_change_password=True)
+                if email.strip():
+                    accounts.update_profile(uid, full or username, email)
                 st.success(f"Usuário criado. Senha provisória: {temp}")
             except auth.AuthError as exc:
                 st.error(str(exc))
@@ -93,3 +98,52 @@ def _doc_access(users: list[dict]) -> None:
             auth.set_doc_areas(int(r["id"]), [key for key, label in DOC_AREAS.items() if r[label]])
         st.success("Acesso a documentos atualizado.")
         st.rerun()
+
+
+def _requests() -> None:
+    pending = accounts.pending_requests()
+    resets = accounts.open_admin_reset_requests()
+    if not pending and not resets:
+        _recovery_code_box()
+        return
+    st.subheader(f"📥 Pedidos aguardando você ({len(pending) + len(resets)})")
+    for r in pending:
+        with st.container(border=True):
+            st.markdown(f"**Solicitação de acesso:** {r['full_name']} · `{r['username']}` · {r['email']}  \n"
+                        f"{r['request_note'] or ''} · pedido em {r['created_at'][:16]}")
+            c1, c2, c3, c4 = st.columns([1.2, 2.5, 1, 1])
+            role = c1.selectbox("Perfil", ROLES, index=ROLES.index(ROLE_VIEWER), key=f"rq_role_{r['id']}")
+            mods = c2.multiselect("Módulos liberados", list(MODULES), format_func=lambda k: MODULES[k][0],
+                                  default=list(DEFAULT_PERMISSIONS[role]), key=f"rq_mods_{r['id']}")
+            if c3.button("✅ Aprovar", key=f"rq_ok_{r['id']}", type="primary"):
+                accounts.approve_request(r["id"], role, mods)
+                st.rerun()
+            if c4.button("❌ Recusar", key=f"rq_no_{r['id']}"):
+                accounts.reject_request(r["id"])
+                st.rerun()
+    for r in resets:
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 1])
+            c1.markdown(f"**Esqueceu a senha:** {r['full_name']} · `{r['username']}` · pedido em {r['created_at'][:16]}")
+            if c2.button("Gerar senha provisória", key=f"rs_{r['id']}", type="primary"):
+                temp = accounts.resolve_admin_reset(r["id"], current_user()["username"])
+                st.session_state["last_temp"] = (r["username"], temp, bool(r["email"]))
+                st.rerun()
+    if last := st.session_state.pop("last_temp", None):
+        st.success(f"Senha provisória de **{last[0]}**: `{last[1]}` — informe ao usuário"
+                   + (" (também enviada por e-mail, se o SMTP estiver configurado)." if last[2] else ".")
+                   + " Ele cria uma senha nova no próximo login.")
+    _recovery_code_box()
+
+
+def _recovery_code_box() -> None:
+    with st.expander("🛟 Código de recuperação do administrador"):
+        st.write("Permite redefinir a senha do administrador pela tela de login se ela for esquecida. "
+                 + ("Já existe um código ativo." if accounts.has_recovery_code() else "**Ainda não há código: gere um.**"))
+        if st.button("Gerar novo código (o anterior deixa de valer)"):
+            st.session_state["admin_new_code"] = accounts.regenerate_recovery_code()
+        if code := st.session_state.pop("admin_new_code", None):
+            st.code(code, language=None)
+            st.download_button("⬇️ Baixar código (.txt)", f"ERP Obras - código de recuperação do administrador\n{code}\n",
+                               file_name="erp_obras_codigo_recuperacao.txt")
+            st.warning("Guarde agora: o código não será mostrado de novo.")

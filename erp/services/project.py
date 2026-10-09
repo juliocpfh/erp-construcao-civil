@@ -73,6 +73,8 @@ def create_blank_project(name: str, location: str = "", start: date | None = Non
 
     add_deliverable(None, name.strip() or "Nova Obra", "Raiz da EAP (obra)")
     create_user("admin", admin_password, ROLE_ADMIN, admin_name, must_change_password=must_change_password)
+    # senha padrão = instalação nova: a tela inicial pede para criar o administrador
+    db.set_setting("admin_setup_pending", "1" if admin_password == DEFAULT_ADMIN_PASSWORD else "0")
 
 
 def load_demo() -> dict:

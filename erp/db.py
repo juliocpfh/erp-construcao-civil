@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS user_doc_access (
     PRIMARY KEY (user_id, area)
 );
 
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,              -- 'email' (código enviado) ou 'admin' (pedido ao administrador)
+    code_hash TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    closed_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -304,11 +316,22 @@ def transaction(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# colunas acrescentadas depois da 1ª versão (bancos antigos/restaurados recebem via ALTER TABLE)
+MIGRATIONS = {
+    "users": {"email": "TEXT", "status": "TEXT NOT NULL DEFAULT 'ativo'", "request_note": "TEXT", "last_login": "TEXT"},
+}
+
+
 def init_db(path: str | Path | None = None) -> None:
     conn = connect(path)
     try:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            existing = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+            for col, ddl in cols.items():
+                if col not in existing:
+                    conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {col} {ddl}')
         conn.commit()
     finally:
         conn.close()

@@ -6,6 +6,7 @@ import streamlit as st
 from erp import auth, db
 from erp.config import env_path
 from erp.settings_store import CONNECTION_FIELDS, load_connection_settings, mask, read_raw_env, write_env
+from erp.services import mailer
 from erp.storage import DualStorage, FTPBackend, S3Backend
 from erp.ui.common import current_user, header
 
@@ -41,6 +42,16 @@ def render() -> None:
                 placeholder=f"atual: {mask(current.get(key, ''))}" if secret and current.get(key) else "",
                 key=f"cfg_{key}")
         values["FTP_TLS"] = "1" if st.checkbox("Usar FTPS (TLS explícito)", current.get("FTP_TLS") == "1") else "0"
+        st.subheader("✉️ E-mail (SMTP) — códigos de recuperação de senha e avisos")
+        st.caption("Gmail: smtp.gmail.com, porta 587, starttls, e uma **senha de app** (Conta Google → Segurança → "
+                   "Senhas de app). Outlook: smtp.office365.com, 587, starttls.")
+        cc = st.columns(2)
+        for i, key in enumerate(["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_SECURITY"]):
+            label, secret = CONNECTION_FIELDS[key]
+            values[key] = cc[i % 2].text_input(
+                label, value="" if secret else current.get(key, ""), type="password" if secret else "default",
+                placeholder=f"atual: {mask(current.get(key, ''))}" if secret and current.get(key) else "",
+                key=f"cfg_{key}")
         st.caption("Campos secretos em branco mantêm o valor atual.")
         saved = st.form_submit_button("🔒 Salvar e criptografar no .env", type="primary")
     if saved:
@@ -59,6 +70,15 @@ def render() -> None:
     if c3.button("🔁 Reenviar mídias pendentes", width="stretch",
                  help="Envia para S3/FTP as mídias que estão apenas no cache local."):
         _resync()
+
+    with st.form("smtp_test"):
+        to = st.text_input("Enviar e-mail de teste para")
+        if st.form_submit_button("✉️ Testar envio de e-mail") and to:
+            try:
+                mailer.send(to, "Teste · ERP Obras", "Se você recebeu esta mensagem, o envio de e-mail está funcionando.")
+                st.success(f"E-mail enviado para {to}.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Falha no envio: {exc}")
 
     with st.expander("Conteúdo atual do .env (criptografado)"):
         raw = read_raw_env()

@@ -42,6 +42,7 @@ def authenticate(username: str, password: str) -> dict | None:
         return None
     if not verify_password(password, user["password_hash"]):
         return None
+    execute("UPDATE users SET last_login = ? WHERE id = ?", (now_iso(), user["id"]))
     user.pop("password_hash", None)
     return user
 
@@ -54,7 +55,8 @@ def get_user(user_id: int) -> dict | None:
 
 
 def list_users() -> list[dict]:
-    users = query("SELECT id, username, full_name, role, must_change_password, active, created_at FROM users ORDER BY id")
+    users = query("SELECT id, username, full_name, email, role, must_change_password, active, created_at, last_login "
+                  "FROM users WHERE COALESCE(status, 'ativo') != 'pendente' ORDER BY id")
     perms = query("SELECT user_id, module FROM user_permissions")
     by_user: dict[int, set[str]] = {}
     for p in perms:
